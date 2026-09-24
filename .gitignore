@@ -1,0 +1,10 @@
+.vs/ 
+**/bin/ 
+**/obj/ 
+node_modules/ 
+**/node_modules/ 
+*.user 
+*.suo 
+*.cache 
+SIGER.Web/dist/ 
+SIGER.Web/.vite/ 

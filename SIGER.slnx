@@ -1,0 +1,8 @@
+<Solution>
+  <Project Path="SIGER.API/SIGER.API.csproj" />
+  <Project Path="SIGER.Application/SIGER.Application.csproj" />
+  <Project Path="SIGER.Desktop/SIGER.Desktop.csproj" />
+  <Project Path="SIGER.Domain/SIGER.Domain.csproj" />
+  <Project Path="SIGER.Infrastructure/SIGER.Infrastructure.csproj" />
+  <Project Path="siger.web/SIGER.Web.esproj" />
+</Solution>
