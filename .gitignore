@@ -1,5 +1,8 @@
 .vs/ 
 **/TestResults/
+**/coverage/
+coverage.cobertura.xml
+*.trx
 **/bin/ 
 **/obj/ 
 node_modules/ 
