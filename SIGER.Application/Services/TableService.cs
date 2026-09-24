@@ -4,6 +4,7 @@ using SIGER.Application.Interfaces.Persistence;
 using SIGER.Application.Interfaces.Repositories;
 using SIGER.Application.Interfaces.Services;
 using SIGER.Domain.Entities;
+using SIGER.Domain.Exceptions;
 
 namespace SIGER.Application.Services;
 
@@ -58,11 +59,11 @@ public class TableService : ITableService
         if (error is not null) return Result<TableDto>.Failure(error);
         var table = await _tableRepository.GetByIdAsync(id, cancellationToken);
         if (table is null) return Result<TableDto>.Failure("Table not found.");
+        if (table.Version != request.Version) throw new BusinessRuleException("The table changed. Reload it and try again.");
         table.Number = request.Number;
         table.Capacity = request.Capacity;
         table.Location = Normalize(request.Location);
         table.UpdatedAt = DateTimeOffset.UtcNow;
-        table.Version = request.Version;
         _tableRepository.Update(table);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
         return Result<TableDto>.Success(Map(table));
@@ -72,9 +73,9 @@ public class TableService : ITableService
     {
         var table = await _tableRepository.GetByIdAsync(id, cancellationToken);
         if (table is null) return Result.Failure("Table not found.");
+        if (table.Version != request.Version) throw new BusinessRuleException("The table changed. Reload it and try again.");
         table.Status = request.Status;
         table.UpdatedAt = DateTimeOffset.UtcNow;
-        table.Version = request.Version;
         _tableRepository.Update(table);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
         return Result.Success();

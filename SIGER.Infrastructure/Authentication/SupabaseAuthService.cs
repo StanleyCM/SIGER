@@ -29,14 +29,20 @@ public sealed class SupabaseAuthService(HttpClient httpClient) : IAuthProvider
 
         await EnsureSuccessAsync(response);
 
-        var session = await response.Content.ReadFromJsonAsync<AuthResponse>(JsonOptions, cancellationToken)
-            ?? throw new HttpRequestException("Supabase returned an empty authentication response.");
+        var session = await ReadResponseAsync<AuthResponse>(response, cancellationToken);
+        var now = DateTimeOffset.UtcNow;
+        if (session.User is null || session.User.Id == Guid.Empty ||
+            string.IsNullOrWhiteSpace(session.AccessToken) || session.ExpiresIn <= 0 ||
+            session.ExpiresIn >= (DateTimeOffset.MaxValue - now).TotalSeconds)
+        {
+            throw new HttpRequestException("Supabase returned an invalid authentication response.");
+        }
 
         return new AuthSessionDto
         {
             AuthUserId = session.User.Id,
             AccessToken = session.AccessToken,
-            ExpiresAt = DateTimeOffset.UtcNow.AddSeconds(session.ExpiresIn)
+            ExpiresAt = now.AddSeconds(session.ExpiresIn)
         };
     }
 
@@ -52,8 +58,11 @@ public sealed class SupabaseAuthService(HttpClient httpClient) : IAuthProvider
             cancellationToken);
 
         await EnsureSuccessAsync(response);
-        var user = await response.Content.ReadFromJsonAsync<UserResponse>(JsonOptions, cancellationToken)
-            ?? throw new HttpRequestException("Supabase returned an empty user creation response.");
+        var user = await ReadResponseAsync<UserResponse>(response, cancellationToken);
+        if (user.Id == Guid.Empty)
+        {
+            throw new HttpRequestException("Supabase returned an invalid user creation response.");
+        }
 
         return user.Id;
     }
@@ -76,6 +85,21 @@ public sealed class SupabaseAuthService(HttpClient httpClient) : IAuthProvider
             cancellationToken);
 
         await EnsureSuccessAsync(response);
+    }
+
+    private static async Task<T> ReadResponseAsync<T>(HttpResponseMessage response, CancellationToken cancellationToken)
+        where T : class
+    {
+        try
+        {
+            return await response.Content.ReadFromJsonAsync<T>(JsonOptions, cancellationToken)
+                ?? throw new HttpRequestException("Supabase returned an empty response.");
+        }
+        catch (JsonException)
+        {
+            // Parser errors can include remote payload fragments. Do not retain their message or inner exception.
+            throw new HttpRequestException("Supabase returned an invalid response.");
+        }
     }
 
     private static Task EnsureSuccessAsync(HttpResponseMessage response)

@@ -6,7 +6,10 @@ using SIGER.Domain.Exceptions;
 
 namespace SIGER.API.Middleware;
 
-public sealed class ExceptionHandlingMiddleware(RequestDelegate next, ILogger<ExceptionHandlingMiddleware> logger)
+public sealed class ExceptionHandlingMiddleware(
+    RequestDelegate next,
+    ILogger<ExceptionHandlingMiddleware> logger,
+    IHostEnvironment environment)
 {
     public async Task InvokeAsync(HttpContext context)
     {
@@ -33,9 +36,19 @@ public sealed class ExceptionHandlingMiddleware(RequestDelegate next, ILogger<Ex
                 BadHttpRequestException => (400, "Invalid request.", "The request could not be read."),
                 _ => (500, "Unexpected error.", "An unexpected error occurred. Use the traceId when contacting support.")
             };
-            // Never log exception text/SQL/connection details from a provider.
-            logger.Log(status >= 500 ? LogLevel.Error : LogLevel.Warning,
-                "Request failed with {ExceptionType}; trace {TraceId}", exception.GetType().Name, context.TraceIdentifier);
+            if (environment.IsDevelopment())
+            {
+                // Keep provider diagnostics in local logs, never in the HTTP response.
+                if (status >= 500)
+                    logger.LogError(exception, "Request failed. TraceId: {TraceId}", context.TraceIdentifier);
+                else
+                    logger.LogWarning(exception, "Request failed. TraceId: {TraceId}", context.TraceIdentifier);
+            }
+            else
+            {
+                logger.Log(status >= 500 ? LogLevel.Error : LogLevel.Warning,
+                    "Request failed with {ExceptionType}; trace {TraceId}", exception.GetType().Name, context.TraceIdentifier);
+            }
             context.Response.Clear();
             await ApiProblems.WriteAsync(context, status, title, detail);
         }

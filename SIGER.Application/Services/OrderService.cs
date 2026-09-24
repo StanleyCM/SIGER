@@ -5,6 +5,7 @@ using SIGER.Application.Interfaces.Repositories;
 using SIGER.Application.Interfaces.Services;
 using SIGER.Domain.Entities;
 using SIGER.Domain.Enums;
+using SIGER.Domain.Exceptions;
 
 namespace SIGER.Application.Services;
 
@@ -159,8 +160,11 @@ public class OrderService : IOrderService
     {
         var order = await _orderRepository.GetWithDetailsAsync(orderId, cancellationToken);
         if (order is null) return Result<OrderDto>.Failure("Order not found.");
+        var stateError = ValidateEditable(order);
+        if (stateError is not null) return Result<OrderDto>.Failure(stateError);
+        if (request.Status == OrderStatus.Paid) return Result<OrderDto>.Failure("An order can only be paid through the payment workflow.");
+        if (order.Version != request.Version) throw new BusinessRuleException("The order changed. Reload it and try again.");
         order.Status = request.Status;
-        order.Version = request.Version;
         order.UpdatedAt = DateTimeOffset.UtcNow;
         _orderRepository.Update(order);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
@@ -172,8 +176,8 @@ public class OrderService : IOrderService
         var order = await _orderRepository.GetWithDetailsAsync(orderId, cancellationToken);
         if (order is null) return Result<OrderDto>.Failure("Order not found.");
         if (order.Status is OrderStatus.Paid or OrderStatus.Cancelled) return Result<OrderDto>.Failure("A paid or cancelled order cannot request an account.");
+        if (order.Version != request.Version) throw new BusinessRuleException("The order changed. Reload it and try again.");
         order.AccountRequested = request.AccountRequested;
-        order.Version = request.Version;
         order.UpdatedAt = DateTimeOffset.UtcNow;
         _orderRepository.Update(order);
         await _unitOfWork.SaveChangesAsync(cancellationToken);

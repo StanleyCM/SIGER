@@ -1,8 +1,29 @@
 <Solution>
-  <Project Path="SIGER.API/SIGER.API.csproj" />
-  <Project Path="SIGER.Application/SIGER.Application.csproj" />
-  <Project Path="SIGER.Desktop/SIGER.Desktop.csproj" />
-  <Project Path="SIGER.Domain/SIGER.Domain.csproj" />
-  <Project Path="SIGER.Infrastructure/SIGER.Infrastructure.csproj" />
-  <Project Path="siger.web/SIGER.Web.esproj" />
+  <Folder Name="/API/">
+    <Project Path="SIGER.API/SIGER.API.csproj" />
+  </Folder>
+  <Folder Name="/Application/">
+    <Project Path="SIGER.Application/SIGER.Application.csproj" />
+  </Folder>
+  <Folder Name="/Core/">
+    <Project Path="SIGER.Domain/SIGER.Domain.csproj" />
+  </Folder>
+  <Folder Name="/Desktop/">
+    <Project Path="SIGER.Desktop/SIGER.Desktop.csproj" />
+  </Folder>
+  <Folder Name="/Infrastructure/">
+    <Project Path="SIGER.Infrastructure/SIGER.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/Tests/">
+    <Project Path="SIGER.API.Tests/SIGER.API.Tests.csproj" />
+    <Project Path="SIGER.Application.Tests/SIGER.Application.Tests.csproj" />
+    <Project Path="SIGER.Domain.Tests/SIGER.Domain.Tests.csproj" />
+    <Project Path="SIGER.Infrastructure.Tests/SIGER.Infrastructure.Tests.csproj" />
+  </Folder>
+  <Folder Name="/Web/">
+    <Project Path="siger.web/SIGER.Web.esproj">
+      <Build />
+      <Deploy />
+    </Project>
+  </Folder>
 </Solution>

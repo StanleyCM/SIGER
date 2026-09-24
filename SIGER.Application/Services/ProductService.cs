@@ -4,6 +4,7 @@ using SIGER.Application.Interfaces.Persistence;
 using SIGER.Application.Interfaces.Repositories;
 using SIGER.Application.Interfaces.Services;
 using SIGER.Domain.Entities;
+using SIGER.Domain.Exceptions;
 
 namespace SIGER.Application.Services;
 
@@ -65,6 +66,7 @@ public class ProductService : IProductService
         if (product is null) return Result<ProductDto>.Failure("Product not found.");
         var category = await _categoryRepository.GetByIdAsync(request.CategoryId, cancellationToken);
         if (category is null) return Result<ProductDto>.Failure("Category not found.");
+        if (product.Version != request.Version) throw new BusinessRuleException("The product changed. Reload it and try again.");
         product.CategoryId = category.Id;
         product.Category = category;
         product.Name = request.Name.Trim();
@@ -72,7 +74,6 @@ public class ProductService : IProductService
         product.Price = request.Price;
         product.ImageUrl = Normalize(request.ImageUrl);
         product.UpdatedAt = DateTimeOffset.UtcNow;
-        product.Version = request.Version;
         _productRepository.Update(product);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
         return Result<ProductDto>.Success(Map(product));
@@ -82,9 +83,9 @@ public class ProductService : IProductService
     {
         var product = await _productRepository.GetByIdAsync(id, cancellationToken);
         if (product is null) return Result.Failure("Product not found.");
+        if (product.Version != request.Version) throw new BusinessRuleException("The product changed. Reload it and try again.");
         product.IsAvailable = request.IsAvailable;
         product.UpdatedAt = DateTimeOffset.UtcNow;
-        product.Version = request.Version;
         _productRepository.Update(product);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
         return Result.Success();

@@ -29,7 +29,8 @@ public class UserService : IUserService
 
     public async Task<Result<UserDto>> CreateAsync(CreateUserRequestDto request, CancellationToken cancellationToken = default)
     {
-        var errors = Validate(request.FirstName, request.LastName, request.Email, request.Password);
+        var password = request.Password ?? string.Empty;
+        var errors = Validate(request.FirstName, request.LastName, request.Email, password);
         if (errors.Count > 0)
         {
             return Result<UserDto>.Failure(errors);
@@ -47,7 +48,7 @@ public class UserService : IUserService
             return Result<UserDto>.Failure("A user with this email already exists.");
         }
 
-        var authUserId = await _authProvider.CreateUserAsync(normalizedEmail, request.Password, cancellationToken);
+        var authUserId = await _authProvider.CreateUserAsync(normalizedEmail, password, cancellationToken);
         var now = DateTimeOffset.UtcNow;
         var user = new User
         {

@@ -32,7 +32,7 @@ public class AuthService : IAuthService
         }
 
         var user = await _userRepository.GetByAuthUserIdAsync(session.AuthUserId, cancellationToken);
-        if (user is null || !user.IsActive)
+        if (user is null || !user.IsActive || user.Role is null || !user.Role.IsActive)
         {
             return Result<LoginResponseDto>.Failure("The user profile is unavailable or inactive.");
         }
