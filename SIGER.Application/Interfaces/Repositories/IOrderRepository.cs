@@ -8,6 +8,7 @@ public interface IOrderRepository
 {
     Task<Order?> GetByIdAsync(long id, CancellationToken cancellationToken = default);
     Task<Order?> GetWithDetailsAsync(long id, CancellationToken cancellationToken = default);
+    Task<bool> HasActiveOrdersAsync(long tableId, long excludingOrderId, CancellationToken cancellationToken = default);
     Task<PaginatedResult<Order>> GetPagedAsync(
         int pageNumber,
         int pageSize,

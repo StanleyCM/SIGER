@@ -5,7 +5,7 @@ using SIGER.Domain.Entities;
 using SIGER.Domain.Enums;
 using SIGER.Domain.Exceptions;
 
-namespace SIGER.Domain.Tests;
+namespace SIGER.Tests.Domain;
 
 public class ModelContractTests
 {
@@ -93,4 +93,3 @@ public class ModelContractTests
         Assert.Equal("rule", new BusinessRuleException("rule").Message);
     }
 }
-

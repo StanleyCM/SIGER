@@ -16,7 +16,7 @@ public class ReservationConfiguration : IEntityTypeConfiguration<Reservation>
         builder.Property(reservation => reservation.ReservationDateTime).HasColumnName("fecha_hora").HasColumnType("timestamp with time zone").IsRequired();
         builder.Property(reservation => reservation.NumberOfPeople).HasColumnName("cantidad_personas").IsRequired();
         builder.Property(reservation => reservation.Status).HasColumnName("estado").HasColumnType("estado_reserva").IsRequired();
-        builder.Property(reservation => reservation.Notes).HasColumnName("notas").HasMaxLength(500);
+        builder.Property(reservation => reservation.Notes).HasColumnName("observaciones").HasMaxLength(500);
         builder.Property(reservation => reservation.CreatedAt).HasColumnName("fecha_creacion").HasColumnType("timestamp with time zone").IsRequired();
         builder.Property(reservation => reservation.UpdatedAt).HasColumnName("fecha_actualizacion").HasColumnType("timestamp with time zone").IsRequired();
 

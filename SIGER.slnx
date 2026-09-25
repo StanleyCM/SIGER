@@ -15,10 +15,7 @@
     <Project Path="SIGER.Infrastructure/SIGER.Infrastructure.csproj" />
   </Folder>
   <Folder Name="/Tests/">
-    <Project Path="SIGER.API.Tests/SIGER.API.Tests.csproj" />
-    <Project Path="SIGER.Application.Tests/SIGER.Application.Tests.csproj" />
-    <Project Path="SIGER.Domain.Tests/SIGER.Domain.Tests.csproj" />
-    <Project Path="SIGER.Infrastructure.Tests/SIGER.Infrastructure.Tests.csproj" />
+    <Project Path="SIGER.Tests/SIGER.Tests.csproj" />
   </Folder>
   <Folder Name="/Web/">
     <Project Path="siger.web/SIGER.Web.esproj">

@@ -5,7 +5,7 @@ using SIGER.Domain.Entities;
 using SIGER.Domain.Enums;
 using SIGER.Domain.Exceptions;
 
-namespace SIGER.Application.Tests;
+namespace SIGER.Tests.Application;
 
 public class OrderPaymentTests
 {
@@ -31,7 +31,7 @@ public class OrderPaymentTests
         Assert.Equal("note", result.Value.Notes);
         Assert.Equal("Soup", Assert.Single(result.Value.Details).ProductName);
         Assert.DoesNotContain(typeof(CreateOrderDetailRequestDto).GetProperties(), p => p.Name is "Price" or "UnitPrice" or "Subtotal");
-        f.Work.Verify(x => x.ExecuteInTransactionAsync(It.IsAny<Func<CancellationToken, Task>>(), f.Token), Times.Once);
+        f.Work.Verify(x => x.ExecuteInTransactionAsync(It.IsAny<Func<CancellationToken, Task<SIGER.Application.Base.Result<OrderDto>>>>(), f.Token), Times.Once);
         f.Work.Verify(x => x.SaveChangesAsync(f.Token), Times.Once);
     }
 
@@ -139,6 +139,7 @@ public class OrderPaymentTests
     {
         var account = await f.OrderService.RequestAccountAsync(5, new() { Version = 5 }, f.Token);
         Assert.True(account.Value!.AccountRequested);
+        f.Order.Status = OrderStatus.Ready;
         var status = await f.OrderService.UpdateStatusAsync(5, new() { Status = OrderStatus.Served, Version = 5 }, f.Token);
         Assert.Equal(OrderStatus.Served, status.Value!.Status);
         var get = await f.OrderService.GetByIdAsync(5, f.Token);
@@ -194,7 +195,7 @@ public class OrderPaymentTests
             Method = PaymentMethod.Card, Reference = " ticket " }, f.Token);
         Assert.True(result.IsSuccess); Assert.Equal("ticket", result.Value!.Reference);
         Assert.Equal(PaymentMethod.Card, result.Value.Method);
-        f.Work.Verify(x => x.ExecuteInTransactionAsync(It.IsAny<Func<CancellationToken, Task>>(), f.Token), Times.Once);
+        f.Work.Verify(x => x.ExecuteInTransactionAsync(It.IsAny<Func<CancellationToken, Task<SIGER.Application.Base.Result<PaymentDto>>>>(), f.Token), Times.Once);
     }
 
     [Theory]
@@ -241,4 +242,3 @@ public class OrderPaymentTests
         Assert.Equal(25m, (await f.PaymentService.GetByOrderIdAsync(5, f.Token)).Value!.Amount);
     }
 }
-

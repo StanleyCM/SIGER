@@ -31,6 +31,7 @@ public sealed class ExceptionHandlingMiddleware(
                 BusinessRuleException => (409, "Business rule conflict.", "The operation conflicts with the current state."),
                 DomainException => (400, "Invalid operation.", "The operation does not satisfy the domain rules."),
                 DbUpdateConcurrencyException => (409, "Concurrency conflict.", "The record changed. Reload it and try again."),
+                UserOperationException operation => (500, "User operation failed.", $"The operation could not be completed safely. Operation reference: {operation.OperationId:D}."),
                 DbUpdateException { InnerException: PostgresException { SqlState: "23505" or "23503" } } =>
                     (409, "Data conflict.", "A duplicate or related record prevents this operation."),
                 BadHttpRequestException => (400, "Invalid request.", "The request could not be read."),

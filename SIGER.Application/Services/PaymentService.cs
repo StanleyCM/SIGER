@@ -30,7 +30,10 @@ public class PaymentService : IPaymentService
         _unitOfWork = unitOfWork;
     }
 
-    public async Task<Result<PaymentDto>> ProcessPaymentAsync(ProcessPaymentRequestDto request, CancellationToken cancellationToken = default)
+    public Task<Result<PaymentDto>> ProcessPaymentAsync(ProcessPaymentRequestDto request, CancellationToken cancellationToken = default)
+        => _unitOfWork.ExecuteInTransactionAsync(token => ProcessPaymentInTransactionAsync(request, token), cancellationToken);
+
+    private async Task<Result<PaymentDto>> ProcessPaymentInTransactionAsync(ProcessPaymentRequestDto request, CancellationToken cancellationToken)
     {
         var order = await _orderRepository.GetWithDetailsAsync(request.OrderId, cancellationToken);
         if (order is null) return Result<PaymentDto>.Failure("Order not found.");
@@ -44,7 +47,8 @@ public class PaymentService : IPaymentService
         Table? table = null;
         if (order.TableId.HasValue)
         {
-            table = order.Table ?? await _tableRepository.GetByIdAsync(order.TableId.Value, cancellationToken);
+            // Match create/cancel lock order: table first, then order/payment writes.
+            table = await _tableRepository.GetByIdForUpdateAsync(order.TableId.Value, cancellationToken);
             if (table is null) return Result<PaymentDto>.Failure("The table associated with the order was not found.");
         }
 
@@ -56,20 +60,17 @@ public class PaymentService : IPaymentService
             PaymentDate = now, UpdatedAt = now
         };
 
-        await _unitOfWork.ExecuteInTransactionAsync(async transactionToken =>
+        await _paymentRepository.AddAsync(payment, cancellationToken);
+        order.Status = OrderStatus.Paid;
+        order.UpdatedAt = now;
+        _orderRepository.Update(order);
+        if (table is not null)
         {
-            await _paymentRepository.AddAsync(payment, transactionToken);
-            order.Status = OrderStatus.Paid;
-            order.UpdatedAt = now;
-            _orderRepository.Update(order);
-            if (table is not null)
-            {
-                table.Status = TableStatus.Available;
-                table.UpdatedAt = now;
-                _tableRepository.Update(table);
-            }
-            await _unitOfWork.SaveChangesAsync(transactionToken);
-        }, cancellationToken);
+            table.Status = TableStatus.Available;
+            table.UpdatedAt = now;
+            _tableRepository.Update(table);
+        }
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Result<PaymentDto>.Success(Map(payment));
     }

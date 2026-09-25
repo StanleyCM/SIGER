@@ -10,6 +10,7 @@ using SIGER.API.Authorization;
 using SIGER.API.Authorization.Policies;
 using SIGER.API.Configuration;
 using SIGER.Application.Interfaces.Services;
+using SIGER.Application.Interfaces.Persistence;
 using SIGER.Application.Services;
 
 namespace SIGER.API.Extensions;
@@ -63,6 +64,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IPromotionService, PromotionService>();
         services.AddScoped<IReportService, ReportService>();
         services.AddScoped<IAuditService, AuditService>();
+        services.AddHttpContextAccessor();
+        services.AddScoped<IAuditActor, HttpAuditActor>();
 
         services.AddScoped<SigerJwtBearerEvents>();
         services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme).AddJwtBearer(options =>

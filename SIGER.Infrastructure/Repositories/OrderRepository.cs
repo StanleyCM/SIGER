@@ -20,6 +20,10 @@ public class OrderRepository : IOrderRepository
     public Task<Order?> GetWithDetailsAsync(long id, CancellationToken cancellationToken = default)
         => CompleteOrders().AsSplitQuery().FirstOrDefaultAsync(order => order.Id == id, cancellationToken);
 
+    public Task<bool> HasActiveOrdersAsync(long tableId, long excludingOrderId, CancellationToken cancellationToken = default)
+        => _context.Orders.AnyAsync(order => order.TableId == tableId && order.Id != excludingOrderId &&
+            order.Status != OrderStatus.Paid && order.Status != OrderStatus.Cancelled, cancellationToken);
+
     public async Task<PaginatedResult<Order>> GetPagedAsync(
         int pageNumber,
         int pageSize,
@@ -38,7 +42,7 @@ public class OrderRepository : IOrderRepository
         if (orderId.HasValue) filtered = filtered.Where(order => order.Id == orderId.Value);
 
         var totalCount = await filtered.CountAsync(cancellationToken);
-        var ids = await filtered.OrderByDescending(order => order.OrderDateTime)
+        var ids = await filtered.OrderByDescending(order => order.OrderDateTime).ThenByDescending(order => order.Id)
             .Skip((pageNumber - 1) * pageSize).Take(pageSize).Select(order => order.Id).ToArrayAsync(cancellationToken);
 
         var orders = await _context.Orders.AsNoTracking()

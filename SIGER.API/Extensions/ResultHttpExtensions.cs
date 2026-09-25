@@ -22,7 +22,10 @@ public static class ResultHttpExtensions
         "Paid or cancelled orders cannot be updated by kitchen.",
         "A paid or cancelled order cannot request an account.",
         "Product is already associated with the promotion.",
-        "Product is not associated with the promotion."
+        "Product is not associated with the promotion.",
+        "Only ready orders can be served.",
+        "Kitchen transitions must advance from pending to preparation to ready.",
+        "The table already has an overlapping reservation."
     ];
 
     public static IActionResult ToHttp<T>(this Result<T> result, ControllerBase controller,

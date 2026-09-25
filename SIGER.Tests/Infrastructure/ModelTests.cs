@@ -2,6 +2,8 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Storage;
+using Moq;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using SIGER.Domain.Entities;
@@ -9,7 +11,7 @@ using SIGER.Infrastructure.DependencyInjection;
 using SIGER.Infrastructure.Persistence;
 using SIGER.Infrastructure.Repositories;
 
-namespace SIGER.Infrastructure.Tests;
+namespace SIGER.Tests.Infrastructure;
 
 // Uses the real Npgsql model. Save interception below prevents ALL database I/O.
 internal sealed class ModelFixture : IDisposable
@@ -30,7 +32,8 @@ internal sealed class ModelFixture : IDisposable
             ["ConnectionStrings:SIGERDatabase"] = "Host=127.0.0.1;Port=1;Database=never_connect;Username=test",
             ["Supabase:Url"] = "https://test.invalid", ["Supabase:ServiceRoleKey"] = "synthetic-test-only"
         }).Build();
-        services.AddDbContext<SIGERDbContext>(options => options.AddInterceptors(new NoDatabaseSave()));
+        services.AddDbContext<SIGERDbContext>(options => options.AddInterceptors(new NoDatabaseSave())
+            .ReplaceService<IDbContextTransactionManager, NoDatabaseTransactions>());
         services.AddInfrastructure(config);
         return services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true, ValidateOnBuild = true });
     }
@@ -40,6 +43,27 @@ internal sealed class ModelFixture : IDisposable
         public override InterceptionResult<int> SavingChanges(DbContextEventData data, InterceptionResult<int> result) => InterceptionResult<int>.SuppressWithResult(0);
         public override ValueTask<InterceptionResult<int>> SavingChangesAsync(DbContextEventData data, InterceptionResult<int> result, CancellationToken token = default) =>
             ValueTask.FromResult(InterceptionResult<int>.SuppressWithResult(0));
+    }
+
+    // Model-only tests suppress writes, so their new enclosing audit transaction must also avoid IO.
+    private sealed class NoDatabaseTransactions : IDbContextTransactionManager
+    {
+        public IDbContextTransaction? CurrentTransaction { get; private set; }
+        public IDbContextTransaction BeginTransaction()
+        {
+            var tx = new Mock<IDbContextTransaction>();
+            tx.SetupGet(x => x.SupportsSavepoints).Returns(true);
+            tx.Setup(x => x.Dispose()).Callback(() => CurrentTransaction = null);
+            tx.Setup(x => x.DisposeAsync()).Callback(() => CurrentTransaction = null).Returns(ValueTask.CompletedTask);
+            return CurrentTransaction = tx.Object;
+        }
+        public Task<IDbContextTransaction> BeginTransactionAsync(CancellationToken token = default) => Task.FromResult(BeginTransaction());
+        public void CommitTransaction() { }
+        public Task CommitTransactionAsync(CancellationToken token = default) => Task.CompletedTask;
+        public void RollbackTransaction() { }
+        public Task RollbackTransactionAsync(CancellationToken token = default) => Task.CompletedTask;
+        public void ResetState() => CurrentTransaction = null;
+        public Task ResetStateAsync(CancellationToken token = default) { ResetState(); return Task.CompletedTask; }
     }
 }
 
@@ -123,8 +147,8 @@ public class ModelTests
     }
 
     [Theory]
-    [InlineData(typeof(Product), "Price", 10, 2)]
-    [InlineData(typeof(OrderDetail), "UnitPrice", 10, 2)]
+    [InlineData(typeof(Product), "Price", 12, 2)]
+    [InlineData(typeof(OrderDetail), "UnitPrice", 12, 2)]
     [InlineData(typeof(OrderDetail), "Subtotal", 12, 2)]
     [InlineData(typeof(Order), "Total", 12, 2)]
     [InlineData(typeof(Payment), "Amount", 12, 2)]
@@ -149,8 +173,8 @@ public class ModelTests
         Assert.All(model.GetEntityTypes().SelectMany(e => e.GetProperties()).Where(p => p.ClrType == typeof(DateTimeOffset)),
             p => Assert.Equal("timestamp with time zone", p.GetColumnType()));
         Assert.Equal(150, model.FindEntityType(typeof(User))!.FindProperty("Email")!.GetMaxLength());
-        Assert.Equal(500, model.FindEntityType(typeof(Product))!.FindProperty("ImageUrl")!.GetMaxLength());
-        Assert.Equal(255, model.FindEntityType(typeof(OrderDetail))!.FindProperty("Note")!.GetMaxLength());
+        Assert.Null(model.FindEntityType(typeof(Product))!.FindProperty("ImageUrl")!.GetMaxLength());
+        Assert.Equal(300, model.FindEntityType(typeof(OrderDetail))!.FindProperty("Note")!.GetMaxLength());
         Assert.Equal(5, model.GetEntityTypes().SelectMany(e => e.GetIndexes()).Count(i => i.IsUnique));
         Assert.All(model.GetEntityTypes().SelectMany(e => e.GetIndexes()), i => Assert.False(string.IsNullOrWhiteSpace(i.GetDatabaseName())));
     }

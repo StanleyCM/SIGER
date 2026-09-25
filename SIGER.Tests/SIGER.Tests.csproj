@@ -12,7 +12,12 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.5" PrivateAssets="all" />
     <PackageReference Include="coverlet.collector" Version="6.0.4" PrivateAssets="all" />
     <PackageReference Include="Moq" Version="4.20.72" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.12" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.12" />
+    <ProjectReference Include="../SIGER.Domain/SIGER.Domain.csproj" />
     <ProjectReference Include="../SIGER.Application/SIGER.Application.csproj" />
+    <ProjectReference Include="../SIGER.Infrastructure/SIGER.Infrastructure.csproj" />
+    <ProjectReference Include="../SIGER.API/SIGER.API.csproj" />
     <Using Include="Xunit" />
   </ItemGroup>
 </Project>

@@ -36,6 +36,9 @@ public class KitchenService : IKitchenService
         var order = await _orderRepository.GetWithDetailsAsync(orderId, cancellationToken);
         if (order is null) return Result<OrderDto>.Failure("Order not found.");
         if (order.Status is OrderStatus.Paid or OrderStatus.Cancelled) return Result<OrderDto>.Failure("Paid or cancelled orders cannot be updated by kitchen.");
+        if ((status == OrderStatus.InPreparation && order.Status != OrderStatus.Pending) ||
+            (status == OrderStatus.Ready && order.Status != OrderStatus.InPreparation))
+            return Result<OrderDto>.Failure("Kitchen transitions must advance from pending to preparation to ready.");
         order.Status = status;
         order.UpdatedAt = DateTimeOffset.UtcNow;
         _orderRepository.Update(order);

@@ -8,7 +8,7 @@ using SIGER.Domain.Entities;
 using SIGER.Domain.Enums;
 using SIGER.Domain.Exceptions;
 
-namespace SIGER.Application.Tests;
+namespace SIGER.Tests.Application;
 
 public class UserCatalogTests
 {
@@ -21,15 +21,15 @@ public class UserCatalogTests
     {
         f.Users.Setup(x => x.AddAsync(It.IsAny<User>(), f.Token)).Callback<User, CancellationToken>((u, _) =>
         {
-            Assert.Equal(f.User.AuthUserId, u.AuthUserId); Assert.Equal("ana@example.test", u.Email);
+            Assert.NotEqual(Guid.Empty, u.AuthUserId); Assert.Equal("ana@example.test", u.Email);
             Assert.True(u.IsActive); Assert.Equal("123", u.Phone);
         }).Returns(Task.CompletedTask);
         var result = await f.UserService.CreateAsync(UserRequest(), f.Token);
         Assert.True(result.IsSuccess); Assert.Equal("Ana", result.Value!.FirstName);
-        Assert.Equal("Waiter", result.Value.RoleName);
+        Assert.Equal("Mesero", result.Value.RoleName);
         var json = JsonSerializer.Serialize(result.Value);
         Assert.DoesNotContain("Password", json); Assert.DoesNotContain("synthetic-test-input", json);
-        f.Provider.Verify(x => x.CreateUserAsync("ana@example.test", "synthetic-test-input", f.Token), Times.Once);
+        f.Provider.Verify(x => x.CreateUserAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), "ana@example.test", "synthetic-test-input", f.Token), Times.Once);
         f.Work.Verify(x => x.SaveChangesAsync(f.Token), Times.Once);
     }
 
@@ -52,14 +52,14 @@ public class UserCatalogTests
         }
         Assert.True((await f.UserService.CreateAsync(request, f.Token)).IsFailure);
         f.NoSave();
-        f.Provider.Verify(x => x.CreateUserAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+        f.Provider.Verify(x => x.CreateUserAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
     public async Task Remote_creation_failure_prevents_local_write()
     {
-        f.Provider.Setup(x => x.CreateUserAsync(It.IsAny<string>(), It.IsAny<string>(), f.Token)).ThrowsAsync(new HttpRequestException());
-        await Assert.ThrowsAsync<HttpRequestException>(() => f.UserService.CreateAsync(UserRequest(), f.Token));
+        f.Provider.Setup(x => x.CreateUserAsync(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<string>(), f.Token)).ThrowsAsync(new HttpRequestException());
+        await Assert.ThrowsAsync<SIGER.Application.Exceptions.UserOperationException>(() => f.UserService.CreateAsync(UserRequest(), f.Token));
         f.Users.Verify(x => x.AddAsync(It.IsAny<User>(), It.IsAny<CancellationToken>()), Times.Never); f.NoSave();
     }
 
@@ -72,10 +72,10 @@ public class UserCatalogTests
         Assert.True((await f.UserService.UpdateStatusAsync(1, new() { IsActive = false }, f.Token)).IsSuccess);
         Assert.False(f.User.IsActive);
         Assert.True((await f.UserService.UpdateStatusAsync(1, new() { IsActive = true }, f.Token)).IsSuccess);
-        f.Provider.Verify(x => x.DisableUserAsync(f.User.AuthUserId, f.Token), Times.Once);
-        f.Provider.Verify(x => x.EnableUserAsync(f.User.AuthUserId, f.Token), Times.Once);
+        f.Provider.Verify(x => x.SetActiveAsync(f.User.AuthUserId, It.IsAny<Guid>(), false, f.Token), Times.Once);
+        f.Provider.Verify(x => x.SetActiveAsync(f.User.AuthUserId, It.IsAny<Guid>(), true, f.Token), Times.Once);
         f.Roles.Setup(x => x.GetAllActiveAsync(f.Token)).ReturnsAsync([f.Role]);
-        Assert.Equal("Waiter", Assert.Single((await f.UserService.GetAvailableRolesAsync(f.Token)).Value!).Name);
+        Assert.Equal("Mesero", Assert.Single((await f.UserService.GetAvailableRolesAsync(f.Token)).Value!).Name);
     }
 
     [Theory]
@@ -192,4 +192,3 @@ public class UserCatalogTests
         Assert.Equal(7, f.Table.Number); Assert.Equal(TableStatus.Available, f.Table.Status); f.NoSave();
     }
 }
-

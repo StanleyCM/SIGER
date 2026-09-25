@@ -24,12 +24,12 @@ public class PromotionService : IPromotionService
     {
         var error = Validate(request.Name, request.DiscountPercentage, request.StartDate, request.EndDate);
         if (error is not null) return Result<PromotionDto>.Failure(error);
-        var products = new List<Product>();
-        foreach (var productId in request.ProductIds.Distinct())
+        var productIds = request.ProductIds.Distinct().ToArray();
+        var products = await _productRepository.GetByIdsAsync(productIds, cancellationToken);
+        var foundIds = products.Select(product => product.Id).ToHashSet();
+        foreach (var productId in productIds)
         {
-            var product = await _productRepository.GetByIdAsync(productId, cancellationToken);
-            if (product is null) return Result<PromotionDto>.Failure($"Product {productId} not found.");
-            products.Add(product);
+            if (!foundIds.Contains(productId)) return Result<PromotionDto>.Failure($"Product {productId} not found.");
         }
         var promotion = new Promotion
         {
@@ -60,7 +60,7 @@ public class PromotionService : IPromotionService
 
     public async Task<Result<PaginatedResult<PromotionDto>>> GetPagedAsync(int pageNumber, int pageSize, CancellationToken cancellationToken = default)
     {
-        if (pageNumber < 1 || pageSize < 1) return Result<PaginatedResult<PromotionDto>>.Failure("Page number and page size must be greater than zero.");
+        if (pageNumber < 1 || pageSize < 1 || pageSize > 200 || ((long)pageNumber - 1) * pageSize > int.MaxValue) return Result<PaginatedResult<PromotionDto>>.Failure("Page number and size must be positive, size at most 200, and offset within the supported range.");
         var page = await _promotionRepository.GetPagedAsync(pageNumber, pageSize, cancellationToken);
         return Result<PaginatedResult<PromotionDto>>.Success(new(page.Items.Select(Map), page.TotalCount, page.PageNumber, page.PageSize));
     }
@@ -125,7 +125,7 @@ public class PromotionService : IPromotionService
     private static string? Validate(string name, decimal discount, DateTimeOffset startDate, DateTimeOffset endDate)
         => string.IsNullOrWhiteSpace(name) ? "Promotion name is required."
             : discount <= 0 || discount > 100 ? "Discount percentage must be greater than zero and at most 100."
-            : endDate < startDate ? "End date cannot be earlier than start date." : null;
+            : endDate <= startDate ? "End date must be later than start date." : null;
     private static string? Normalize(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     private static PromotionDto Map(Promotion promotion) => new()
     {

@@ -1,7 +1,7 @@
 using Moq;
 using SIGER.Application.Base;
 using SIGER.Domain.Entities;
-namespace SIGER.Application.Tests;
+namespace SIGER.Tests.Application;
 public class QueryContractTests
 {
 
@@ -141,4 +141,3 @@ public class QueryContractTests
         Assert.True((await f.AuditService.GetByIdAsync(999, f.Token)).IsFailure);
     }
 }
-

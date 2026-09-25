@@ -47,7 +47,7 @@ public class ProductService : IProductService
 
     public async Task<Result<PaginatedResult<ProductDto>>> GetPagedAsync(int pageNumber, int pageSize, long? categoryId = null, CancellationToken cancellationToken = default)
     {
-        if (pageNumber < 1 || pageSize < 1) return Result<PaginatedResult<ProductDto>>.Failure("Page number and page size must be greater than zero.");
+        if (pageNumber < 1 || pageSize < 1 || pageSize > 200 || ((long)pageNumber - 1) * pageSize > int.MaxValue) return Result<PaginatedResult<ProductDto>>.Failure("Page number and size must be positive, size at most 200, and offset within the supported range.");
         var page = await _productRepository.GetPagedAsync(pageNumber, pageSize, categoryId, cancellationToken);
         return Result<PaginatedResult<ProductDto>>.Success(new(page.Items.Select(Map), page.TotalCount, page.PageNumber, page.PageSize));
     }

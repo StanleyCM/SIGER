@@ -15,14 +15,14 @@ public class UserConfiguration : IEntityTypeConfiguration<User>
         builder.Property(user => user.AuthUserId).HasColumnName("auth_user_id").IsRequired();
         builder.Property(user => user.FirstName).HasColumnName("nombre").HasMaxLength(100).IsRequired();
         builder.Property(user => user.LastName).HasColumnName("apellido").HasMaxLength(100).IsRequired();
-        builder.Property(user => user.Email).HasColumnName("correo").HasMaxLength(150).IsRequired();
+        builder.Property(user => user.Email).HasColumnName("email").HasMaxLength(150).IsRequired();
         builder.Property(user => user.Phone).HasColumnName("telefono").HasMaxLength(20);
-        builder.Property(user => user.IsActive).HasColumnName("activo").IsRequired();
+        builder.Property(user => user.IsActive).HasColumnName("estado").IsRequired();
         builder.Property(user => user.CreatedAt).HasColumnName("fecha_creacion").HasColumnType("timestamp with time zone").IsRequired();
         builder.Property(user => user.UpdatedAt).HasColumnName("fecha_actualizacion").HasColumnType("timestamp with time zone").IsRequired();
 
         builder.HasIndex(user => user.AuthUserId).IsUnique().HasDatabaseName("ux_usuario_auth_user_id");
-        builder.HasIndex(user => user.Email).IsUnique().HasDatabaseName("ux_usuario_correo");
+        builder.HasIndex(user => user.Email).HasDatabaseName("ix_usuario_email");
         builder.HasIndex(user => user.RoleId).HasDatabaseName("ix_usuario_id_rol");
 
         builder.HasOne(user => user.Role)

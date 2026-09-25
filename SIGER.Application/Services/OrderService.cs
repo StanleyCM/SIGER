@@ -31,7 +31,10 @@ public class OrderService : IOrderService
         _unitOfWork = unitOfWork;
     }
 
-    public async Task<Result<OrderDto>> CreateOrderAsync(CreateOrderRequestDto request, CancellationToken cancellationToken = default)
+    public Task<Result<OrderDto>> CreateOrderAsync(CreateOrderRequestDto request, CancellationToken cancellationToken = default)
+        => _unitOfWork.ExecuteInTransactionAsync(token => CreateOrderInTransactionAsync(request, token), cancellationToken);
+
+    private async Task<Result<OrderDto>> CreateOrderInTransactionAsync(CreateOrderRequestDto request, CancellationToken cancellationToken)
     {
         var user = await _userRepository.GetByIdAsync(request.UserId, cancellationToken);
         if (user is null || !user.IsActive) return Result<OrderDto>.Failure("The creator user does not exist or is inactive.");
@@ -46,7 +49,7 @@ public class OrderService : IOrderService
         Table? table = null;
         if (request.TableId.HasValue)
         {
-            table = await _tableRepository.GetByIdAsync(request.TableId.Value, cancellationToken);
+            table = await _tableRepository.GetByIdForUpdateAsync(request.TableId.Value, cancellationToken);
             if (table is null) return Result<OrderDto>.Failure("Table not found.");
             if (table.Status != TableStatus.Available) return Result<OrderDto>.Failure("The selected table is not available.");
         }
@@ -65,26 +68,26 @@ public class OrderService : IOrderService
             Type = request.Type, Notes = Normalize(request.Notes), AccountRequested = false, Version = 0
         };
 
+        if (request.Items.Any(item => item.Quantity <= 0))
+            return Result<OrderDto>.Failure("All product quantities must be greater than zero.");
+        var products = (await _productRepository.GetByIdsAsync(
+            request.Items.Select(item => item.ProductId).Distinct().ToArray(), cancellationToken)).ToDictionary(product => product.Id);
         foreach (var itemRequest in request.Items)
         {
-            if (itemRequest.Quantity <= 0) return Result<OrderDto>.Failure("All product quantities must be greater than zero.");
-            var product = await _productRepository.GetByIdAsync(itemRequest.ProductId, cancellationToken);
+            products.TryGetValue(itemRequest.ProductId, out var product);
             if (product is null || !product.IsAvailable) return Result<OrderDto>.Failure($"Product {itemRequest.ProductId} does not exist or is unavailable.");
             order.Details.Add(CreateDetail(order, product, itemRequest.Quantity, itemRequest.Note));
         }
 
         RecalculateTotal(order);
-        await _unitOfWork.ExecuteInTransactionAsync(async transactionToken =>
+        if (table is not null)
         {
-            if (table is not null)
-            {
-                table.Status = TableStatus.Occupied;
-                table.UpdatedAt = now;
-                _tableRepository.Update(table);
-            }
-            await _orderRepository.AddAsync(order, transactionToken);
-            await _unitOfWork.SaveChangesAsync(transactionToken);
-        }, cancellationToken);
+            table.Status = TableStatus.Occupied;
+            table.UpdatedAt = now;
+            _tableRepository.Update(table);
+        }
+        await _orderRepository.AddAsync(order, cancellationToken);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         return Result<OrderDto>.Success(Map(order));
     }
@@ -97,7 +100,7 @@ public class OrderService : IOrderService
 
     public async Task<Result<PaginatedResult<OrderDto>>> GetPagedAsync(int pageNumber, int pageSize, DateTimeOffset? startDate = null, DateTimeOffset? endDate = null, long? tableId = null, OrderStatus? status = null, long? orderId = null, CancellationToken cancellationToken = default)
     {
-        if (pageNumber < 1 || pageSize < 1) return Result<PaginatedResult<OrderDto>>.Failure("Page number and page size must be greater than zero.");
+        if (pageNumber < 1 || pageSize < 1 || pageSize > 200 || ((long)pageNumber - 1) * pageSize > int.MaxValue) return Result<PaginatedResult<OrderDto>>.Failure("Page number and size must be positive, size at most 200, and offset within the supported range.");
         if (startDate.HasValue && endDate.HasValue && endDate < startDate) return Result<PaginatedResult<OrderDto>>.Failure("End date cannot be earlier than start date.");
         var page = await _orderRepository.GetPagedAsync(pageNumber, pageSize, startDate, endDate, tableId, status, orderId, cancellationToken);
         return Result<PaginatedResult<OrderDto>>.Success(new(page.Items.Select(Map), page.TotalCount, page.PageNumber, page.PageSize));
@@ -131,8 +134,7 @@ public class OrderService : IOrderService
         if (product is null || !product.IsAvailable) return Result<OrderDto>.Failure("Product does not exist or is unavailable.");
         detail.Product = product;
         detail.Quantity = request.Quantity;
-        detail.UnitPrice = product.Price;
-        detail.Subtotal = product.Price * request.Quantity;
+        detail.Subtotal = detail.UnitPrice * request.Quantity;
         detail.Note = Normalize(request.Note);
         RecalculateTotal(order);
         order.UpdatedAt = DateTimeOffset.UtcNow;
@@ -156,7 +158,10 @@ public class OrderService : IOrderService
         return Result<OrderDto>.Success(Map(order));
     }
 
-    public async Task<Result<OrderDto>> UpdateStatusAsync(long orderId, UpdateOrderStatusRequestDto request, CancellationToken cancellationToken = default)
+    public Task<Result<OrderDto>> UpdateStatusAsync(long orderId, UpdateOrderStatusRequestDto request, CancellationToken cancellationToken = default)
+        => _unitOfWork.ExecuteInTransactionAsync(token => UpdateStatusInTransactionAsync(orderId, request, token), cancellationToken);
+
+    private async Task<Result<OrderDto>> UpdateStatusInTransactionAsync(long orderId, UpdateOrderStatusRequestDto request, CancellationToken cancellationToken)
     {
         var order = await _orderRepository.GetWithDetailsAsync(orderId, cancellationToken);
         if (order is null) return Result<OrderDto>.Failure("Order not found.");
@@ -164,6 +169,20 @@ public class OrderService : IOrderService
         if (stateError is not null) return Result<OrderDto>.Failure(stateError);
         if (request.Status == OrderStatus.Paid) return Result<OrderDto>.Failure("An order can only be paid through the payment workflow.");
         if (order.Version != request.Version) throw new BusinessRuleException("The order changed. Reload it and try again.");
+        if (request.Status == OrderStatus.Served && order.Status != OrderStatus.Ready)
+            return Result<OrderDto>.Failure("Only ready orders can be served.");
+        if (request.Status is not (OrderStatus.Served or OrderStatus.Cancelled))
+            return Result<OrderDto>.Failure("Use the kitchen workflow for preparation transitions.");
+        if (request.Status == OrderStatus.Cancelled && order.TableId.HasValue)
+        {
+            var table = await _tableRepository.GetByIdForUpdateAsync(order.TableId.Value, cancellationToken);
+            if (table is null) return Result<OrderDto>.Failure("Table not found.");
+            if (!await _orderRepository.HasActiveOrdersAsync(table.Id, order.Id, cancellationToken))
+            {
+                table.Status = TableStatus.Available;
+                _tableRepository.Update(table);
+            }
+        }
         order.Status = request.Status;
         order.UpdatedAt = DateTimeOffset.UtcNow;
         _orderRepository.Update(order);

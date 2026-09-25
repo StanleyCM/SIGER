@@ -6,6 +6,7 @@ namespace SIGER.Application.Interfaces.Repositories;
 public interface IProductRepository
 {
     Task<Product?> GetByIdAsync(long id, CancellationToken cancellationToken = default);
+    Task<IReadOnlyCollection<Product>> GetByIdsAsync(IReadOnlyCollection<long> ids, CancellationToken cancellationToken = default);
     Task<PaginatedResult<Product>> GetPagedAsync(
         int pageNumber,
         int pageSize,

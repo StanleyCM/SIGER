@@ -2,6 +2,7 @@ using System.Net.Http.Headers;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using SIGER.Application.Interfaces.Persistence;
 using SIGER.Application.Interfaces.Repositories;
 using SIGER.Application.Interfaces.Services;
@@ -26,6 +27,7 @@ public static class InfrastructureServiceRegistration
 
         services.AddDbContext<SIGERDbContext>(options =>
             options.UseNpgsql(connectionString, npgsql => npgsql.MapSIGEREnums()));
+        services.TryAddSingleton<IAuditActor, InternalAuditActor>();
 
         services.AddScoped<IRoleRepository, RoleRepository>();
         services.AddScoped<IUserRepository, UserRepository>();
@@ -39,6 +41,7 @@ public static class InfrastructureServiceRegistration
         services.AddScoped<IAuditRepository, AuditRepository>();
         services.AddScoped<IReportRepository, ReportRepository>();
         services.AddScoped<IUnitOfWork, UnitOfWork.UnitOfWork>();
+        services.AddScoped<IUserOperationReporter, UserOperationReporter>();
 
         var supabaseUrl = configuration["Supabase:Url"]
             ?? throw new InvalidOperationException("Configuration value 'Supabase:Url' is not configured.");
@@ -55,5 +58,11 @@ public static class InfrastructureServiceRegistration
         });
 
         return services;
+    }
+
+    private sealed class InternalAuditActor : IAuditActor
+    {
+        public long? UserId => null;
+        public string? IpAddress => null;
     }
 }

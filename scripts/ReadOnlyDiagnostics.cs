@@ -1,6 +1,7 @@
 // Opt-in read-only diagnostics; never included in the automated test suite.
 // Run: dotnet run --file scripts/ReadOnlyDiagnostics.cs
 #:project ../SIGER.API/SIGER.API.csproj
+#:property PublishAot=false
 
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;

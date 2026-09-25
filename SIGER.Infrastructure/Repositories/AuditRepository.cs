@@ -47,7 +47,7 @@ public sealed class AuditRepository(SIGERDbContext context) : IAuditRepository
 
         var totalCount = await query.CountAsync(cancellationToken);
         var items = await query
-            .OrderByDescending(audit => audit.Timestamp)
+            .OrderByDescending(audit => audit.Timestamp).ThenByDescending(audit => audit.Id)
             .Skip((pageNumber - 1) * pageSize)
             .Take(pageSize)
             .Include(audit => audit.User)

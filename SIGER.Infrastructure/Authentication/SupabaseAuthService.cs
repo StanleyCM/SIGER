@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using SIGER.Application.DTOs.Auth;
 using SIGER.Application.Interfaces.Services;
+using SIGER.Domain.Exceptions;
 
 namespace SIGER.Infrastructure.Authentication;
 
@@ -46,45 +47,81 @@ public sealed class SupabaseAuthService(HttpClient httpClient) : IAuthProvider
         };
     }
 
-    public async Task<Guid> CreateUserAsync(
-        string email,
-        string password,
-        CancellationToken cancellationToken = default)
+    public async Task<AuthUserStateDto> CreateUserAsync(Guid authUserId, Guid operationId,
+        string email, string password, CancellationToken cancellationToken = default)
     {
         using var response = await httpClient.PostAsJsonAsync(
             "admin/users",
-            new CreateUserRequest(email, password, true),
+            new { id = authUserId, email, password, email_confirm = true, app_metadata = new { siger_operation_id = operationId } },
             JsonOptions,
             cancellationToken);
 
-        await EnsureSuccessAsync(response);
-        var user = await ReadResponseAsync<UserResponse>(response, cancellationToken);
-        if (user.Id == Guid.Empty)
-        {
-            throw new HttpRequestException("Supabase returned an invalid user creation response.");
-        }
-
-        return user.Id;
+        await EnsureAdminSuccessAsync(response);
+        return await ReadStateAsync(response, authUserId, cancellationToken);
     }
 
-    public Task EnableUserAsync(Guid authUserId, CancellationToken cancellationToken = default) =>
-        SetBanDurationAsync(authUserId, "none", cancellationToken);
-
-    public Task DisableUserAsync(Guid authUserId, CancellationToken cancellationToken = default) =>
-        SetBanDurationAsync(authUserId, "876000h", cancellationToken);
-
-    private async Task SetBanDurationAsync(
-        Guid authUserId,
-        string duration,
-        CancellationToken cancellationToken)
+    public async Task<AuthUserStateDto?> GetUserAsync(Guid authUserId, CancellationToken cancellationToken = default)
     {
-        using var response = await httpClient.PutAsJsonAsync(
-            $"admin/users/{authUserId:D}",
-            new UpdateUserRequest(duration),
-            JsonOptions,
-            cancellationToken);
+        using var response = await httpClient.GetAsync($"admin/users/{authUserId:D}", cancellationToken);
+        if (response.StatusCode == HttpStatusCode.NotFound) return null;
+        await EnsureAdminSuccessAsync(response);
+        return await ReadStateAsync(response, authUserId, cancellationToken);
+    }
 
-        await EnsureSuccessAsync(response);
+    public Task<AuthUserStateDto> UpdateEmailAsync(Guid authUserId, Guid operationId, string email, CancellationToken cancellationToken = default)
+        // Administrative update is immediate by Supabase contract. Do not send email_confirm or change project settings.
+        => UpdateAsync(authUserId, new { email, app_metadata = new { siger_operation_id = operationId } }, cancellationToken);
+
+    public Task<AuthUserStateDto> SetActiveAsync(Guid authUserId, Guid operationId, bool isActive, CancellationToken cancellationToken = default)
+        => UpdateAsync(authUserId, new { ban_duration = isActive ? "none" : "876000h", app_metadata = new { siger_operation_id = operationId } }, cancellationToken);
+
+    public async Task RestoreUserAsync(AuthUserStateDto original, AuthUserStateDto expected, CancellationToken cancellationToken = default)
+    {
+        var current = await GetUserAsync(expected.Id, cancellationToken);
+        if (current != expected) throw new BusinessRuleException("Auth state changed; compensation will not overwrite it.");
+        var payload = new Dictionary<string, object?>();
+        if (original.Email != expected.Email) payload["email"] = original.Email;
+        if (original.BannedUntil != expected.BannedUntil)
+            payload["ban_duration"] = original.IsActive ? "none" :
+                Math.Ceiling((original.BannedUntil!.Value - DateTimeOffset.UtcNow).TotalSeconds).ToString(System.Globalization.CultureInfo.InvariantCulture) + "s";
+        payload["app_metadata"] = new { siger_operation_id = original.OperationId };
+        var restored = await UpdateAsync(expected.Id, payload, cancellationToken);
+        if (!string.Equals(restored.Email, original.Email, StringComparison.OrdinalIgnoreCase) || restored.IsActive != original.IsActive)
+            throw new HttpRequestException("Auth compensation could not be verified.");
+    }
+
+    public async Task DeleteCreatedUserAsync(AuthUserStateDto expected, CancellationToken cancellationToken = default)
+    {
+        var current = await GetUserAsync(expected.Id, cancellationToken);
+        if (current is null) return;
+        if (current != expected || expected.OperationId is null)
+            throw new BusinessRuleException("Auth state changed; compensation will not delete it.");
+        using var response = await httpClient.DeleteAsync($"admin/users/{expected.Id:D}", cancellationToken);
+        await EnsureAdminSuccessAsync(response);
+    }
+
+    private async Task<AuthUserStateDto> UpdateAsync(Guid id, object payload, CancellationToken cancellationToken)
+    {
+        using var response = await httpClient.PutAsJsonAsync($"admin/users/{id:D}", payload, JsonOptions, cancellationToken);
+        await EnsureAdminSuccessAsync(response);
+        return await ReadStateAsync(response, id, cancellationToken);
+    }
+
+    private static async Task<AuthUserStateDto> ReadStateAsync(HttpResponseMessage response, Guid expectedId, CancellationToken token)
+    {
+        var user = await ReadResponseAsync<UserResponse>(response, token);
+        if (user.Id == Guid.Empty || user.Id != expectedId || string.IsNullOrWhiteSpace(user.Email) || user.UpdatedAt == default || user.CreatedAt == default)
+            throw new HttpRequestException("Supabase returned an invalid user state.");
+        Guid? operation = user.AppMetadata is not null && user.AppMetadata.TryGetValue("siger_operation_id", out var value) && value.ValueKind == JsonValueKind.String &&
+            Guid.TryParse(value.GetString(), out var parsed) ? parsed : null;
+        return new(user.Id, user.Email, user.UpdatedAt, user.CreatedAt, user.BannedUntil, operation);
+    }
+
+    private static Task EnsureAdminSuccessAsync(HttpResponseMessage response)
+    {
+        if (response.StatusCode is HttpStatusCode.BadRequest or HttpStatusCode.Conflict or HttpStatusCode.UnprocessableEntity)
+            throw new BusinessRuleException("Auth rejected the user operation; check the requested identity and values.");
+        return EnsureSuccessAsync(response);
     }
 
     private static async Task<T> ReadResponseAsync<T>(HttpResponseMessage response, CancellationToken cancellationToken)
@@ -117,14 +154,6 @@ public sealed class SupabaseAuthService(HttpClient httpClient) : IAuthProvider
 
     private sealed record SignInRequest(string Email, string Password);
 
-    private sealed record CreateUserRequest(
-        string Email,
-        string Password,
-        [property: JsonPropertyName("email_confirm")] bool EmailConfirm);
-
-    private sealed record UpdateUserRequest(
-        [property: JsonPropertyName("ban_duration")] string BanDuration);
-
     private sealed class AuthResponse
     {
         [JsonPropertyName("access_token")]
@@ -139,5 +168,10 @@ public sealed class SupabaseAuthService(HttpClient httpClient) : IAuthProvider
     private sealed class UserResponse
     {
         public Guid Id { get; init; }
+        public string Email { get; init; } = string.Empty;
+        [JsonPropertyName("updated_at")] public DateTimeOffset UpdatedAt { get; init; }
+        [JsonPropertyName("created_at")] public DateTimeOffset CreatedAt { get; init; }
+        [JsonPropertyName("banned_until")] public DateTimeOffset? BannedUntil { get; init; }
+        [JsonPropertyName("app_metadata")] public Dictionary<string, JsonElement> AppMetadata { get; init; } = [];
     }
 }

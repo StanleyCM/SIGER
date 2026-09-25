@@ -67,6 +67,7 @@ public sealed class ReportRepository(SIGERDbContext context) : IReportRepository
             })
             .OrderByDescending(product => product.QuantitySold)
             .ThenByDescending(product => product.Revenue)
+            .ThenBy(product => product.ProductId)
             .Take(limit)
             .ToListAsync(cancellationToken);
     }

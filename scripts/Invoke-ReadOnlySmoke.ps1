@@ -1,7 +1,7 @@
 # Read-only, opt-in smoke test. Not invoked by dotnet test.
 # Requires the API to have been built and its existing User Secrets configured.
 [CmdletBinding()]
-param()
+param([ValidateSet('Debug', 'Release')][string]$Configuration = 'Release')
 $ErrorActionPreference = 'Stop'
 $taskRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $apiRoot = Join-Path $taskRoot 'SIGER.API'
@@ -18,7 +18,7 @@ if (@($required | Where-Object { [string]::IsNullOrWhiteSpace($settings[$_]) }).
     Write-Output 'Smoke test omitted: required keys unavailable in existing API User Secrets.'
     return
 }
-$apiDll = Join-Path $apiRoot 'bin/Debug/net10.0/SIGER.API.dll'
+$apiDll = Join-Path $apiRoot "bin/$Configuration/net10.0/SIGER.API.dll"
 if (-not (Test-Path -LiteralPath $apiDll)) { throw 'Build SIGER.API before running this smoke test.' }
 
 $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
@@ -96,7 +96,7 @@ try {
             } finally { $jwksClient.Dispose() }
         } catch { Write-Output 'Public JWKS: unavailable; details withheld.' }
     }
-    Write-Output 'Login real pendiente de usuario de prueba.'
+    Write-Output 'Login not performed by this GET-only script; consult BACKEND_AUDIT.md for authentication evidence.'
     Write-Output 'Only HTTP GET requests performed. No remote data or schema changes requested.'
 } finally {
     $client.Dispose()
@@ -106,4 +106,3 @@ try {
     }
     $settings = $null
 }
-

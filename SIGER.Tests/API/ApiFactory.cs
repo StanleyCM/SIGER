@@ -18,7 +18,7 @@ using SIGER.Application.Interfaces.Repositories;
 using SIGER.Application.Interfaces.Services;
 using SIGER.Domain.Entities;
 
-namespace SIGER.API.Tests;
+namespace SIGER.Tests.API;
 
 internal sealed class ApiFactory : WebApplicationFactory<Program>
 {
@@ -27,11 +27,12 @@ internal sealed class ApiFactory : WebApplicationFactory<Program>
     private readonly ECDsa ec = ECDsa.Create(ECCurve.NamedCurves.nistP256);
     public const string Issuer = "https://test.invalid/auth/v1";
     public User LocalUser { get; } = new() { Id = 42, AuthUserId = Guid.NewGuid(), IsActive = true,
-        FirstName = "Test", LastName = "User", Role = new Role { Name = "Administrator", IsActive = true } };
+        FirstName = "Test", LastName = "User", Role = new Role { Name = "Administrador", IsActive = true } };
     public bool UserExists { get; set; } = true;
     public int LoginLimit { get; set; } = 100;
     public int PublicLimit { get; set; } = 100;
     public string EnvironmentName { get; set; } = "Development";
+    public Action<IServiceCollection>? ConfigureBackend { get; set; }
     public Mock<IUserRepository> Users { get; } = new();
     public Mock<T> Service<T>() where T : class => (Mock<T>)mocks[typeof(T)];
 
@@ -80,6 +81,7 @@ internal sealed class ApiFactory : WebApplicationFactory<Program>
                 services.AddSingleton(type, mock.Object);
             }
             services.RemoveAll<IUserRepository>(); services.AddSingleton(Users.Object);
+            ConfigureBackend?.Invoke(services);
             services.PostConfigure<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme, options =>
             {
                 var configuration = new OpenIdConnectConfiguration { Issuer = Issuer };
@@ -92,7 +94,7 @@ internal sealed class ApiFactory : WebApplicationFactory<Program>
 
     public HttpClient Client(string? role = null)
     {
-        LocalUser.Role.Name = role ?? "Administrator";
+        LocalUser.Role.Name = role ?? "Administrador";
         var client = CreateClient(new WebApplicationFactoryClientOptions { BaseAddress = new("https://localhost"), AllowAutoRedirect = false });
         if (role is not null) client.DefaultRequestHeaders.Authorization = new("Bearer", Token());
         return client;
@@ -105,7 +107,7 @@ internal sealed class ApiFactory : WebApplicationFactory<Program>
         SecurityKey key = ecdsa ? new ECDsaSecurityKey(ec) { KeyId = "test-ec" } :
             new RsaSecurityKey(other ?? rsa) { KeyId = "test-rsa" };
         var claims = new List<Claim> { new("sub", subject ?? LocalUser.AuthUserId.ToString()) };
-        if (spoofRole) { claims.Add(new("siger_role", "Administrator")); claims.Add(new("role", "Administrator")); claims.Add(new("siger_user_id", "999")); }
+        if (spoofRole) { claims.Add(new("siger_role", "Administrador")); claims.Add(new("role", "Administrador")); claims.Add(new("siger_user_id", "999")); }
         var jwt = new JwtSecurityToken(issuer ?? Issuer, audience, claims, DateTime.UtcNow.AddHours(-2),
             expired ? DateTime.UtcNow.AddHours(-1) : DateTime.UtcNow.AddMinutes(10),
             new SigningCredentials(key, ecdsa ? SecurityAlgorithms.EcdsaSha256 : SecurityAlgorithms.RsaSha256));

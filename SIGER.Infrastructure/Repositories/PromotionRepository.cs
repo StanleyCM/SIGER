@@ -22,7 +22,7 @@ public sealed class PromotionRepository(SIGERDbContext context) : IPromotionRepo
     {
         var query = context.Promotions
             .AsNoTracking()
-            .OrderByDescending(promotion => promotion.StartDate);
+            .OrderByDescending(promotion => promotion.StartDate).ThenByDescending(promotion => promotion.Id);
 
         var totalCount = await query.CountAsync(cancellationToken);
         var items = await query

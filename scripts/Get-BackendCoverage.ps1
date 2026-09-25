@@ -2,10 +2,14 @@
 param([string]$ResultsPath = (Join-Path $PSScriptRoot '../TestResults/final-coverage'))
 $ErrorActionPreference = 'Stop'
 $assemblies = @{}
+# SIGER.Tests emits one report containing all four productive assemblies.
+# Group by measured assembly, not by the project that ran the tests.
+$backendAssemblies = @('SIGER.Domain', 'SIGER.Application', 'SIGER.Infrastructure', 'SIGER.API')
 foreach ($file in Get-ChildItem -LiteralPath $ResultsPath -Recurse -Filter coverage.cobertura.xml) {
     [xml]$document = Get-Content -LiteralPath $file.FullName
     $sourceRoot = @($document.coverage.sources.source)[0]
     foreach ($package in $document.coverage.packages.package) {
+        if ($package.name -notin $backendAssemblies) { continue }
         if (-not $assemblies.ContainsKey($package.name)) { $assemblies[$package.name] = @{} }
         foreach ($class in $package.classes.class) {
             foreach ($line in $class.lines.line) {

@@ -11,9 +11,9 @@ public class RoleConfiguration : IEntityTypeConfiguration<Role>
         builder.ToTable("rol");
         builder.HasKey(role => role.Id).HasName("pk_rol");
         builder.Property(role => role.Id).HasColumnName("id_rol").UseIdentityByDefaultColumn();
-        builder.Property(role => role.Name).HasColumnName("nombre").HasMaxLength(100).IsRequired();
-        builder.Property(role => role.Description).HasColumnName("descripcion").HasMaxLength(255);
-        builder.Property(role => role.IsActive).HasColumnName("activo").IsRequired();
+        builder.Property(role => role.Name).HasColumnName("nombre").HasMaxLength(50).IsRequired();
+        builder.Property(role => role.Description).HasColumnName("descripcion").HasMaxLength(250);
+        builder.Property(role => role.IsActive).HasColumnName("estado").IsRequired();
         builder.HasIndex(role => role.Name).IsUnique().HasDatabaseName("ux_rol_nombre");
     }
 }

@@ -16,6 +16,17 @@ public class TableRepository : ITableRepository
     public Task<Table?> GetByIdAsync(long id, CancellationToken cancellationToken = default)
         => _context.Tables.FirstOrDefaultAsync(table => table.Id == id, cancellationToken);
 
+    public async Task<Table?> GetByIdForUpdateAsync(long id, CancellationToken cancellationToken = default)
+    {
+        if (_context.Database.CurrentTransaction is null)
+            throw new InvalidOperationException("A transaction is required to lock a table.");
+        var table = await _context.Tables.FromSqlInterpolated($"SELECT * FROM public.mesa WHERE id_mesa = {id} FOR UPDATE")
+            .SingleOrDefaultAsync(cancellationToken);
+        // A preceding relationship load may already have tracked this table before acquiring the lock.
+        if (table is not null) await _context.Entry(table).ReloadAsync(cancellationToken);
+        return table;
+    }
+
     public async Task<PaginatedResult<Table>> GetPagedAsync(int pageNumber, int pageSize, CancellationToken cancellationToken = default)
     {
         var query = _context.Tables.AsNoTracking();

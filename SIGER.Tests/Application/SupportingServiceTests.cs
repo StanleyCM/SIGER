@@ -6,7 +6,7 @@ using SIGER.Application.DTOs.Reports;
 using SIGER.Domain.Entities;
 using SIGER.Domain.Enums;
 
-namespace SIGER.Application.Tests;
+namespace SIGER.Tests.Application;
 
 public class SupportingServiceTests
 {
@@ -99,6 +99,22 @@ public class SupportingServiceTests
         Assert.Equal("Dinner", (await f.PromotionService.GetByIdAsync(8, f.Token)).Value!.Name);
         f.Promotions.Setup(x => x.GetActiveAsync(Future, f.Token)).ReturnsAsync([promotion]);
         Assert.Single((await f.PromotionService.GetActiveAsync(Future, f.Token)).Value!);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Promotion_equal_start_and_end_is_rejected_before_persistence(bool update)
+    {
+        var request = PromotionRequest();
+        request.EndDate = request.StartDate;
+        f.Promotions.Setup(x => x.GetByIdAsync(8, f.Token)).ReturnsAsync(new Promotion { Id = 8 });
+        var result = update
+            ? await f.PromotionService.UpdateAsync(8, new() { Name = request.Name, DiscountPercentage = request.DiscountPercentage,
+                StartDate = request.StartDate, EndDate = request.EndDate }, f.Token)
+            : await f.PromotionService.CreateAsync(request, f.Token);
+        Assert.True(result.IsFailure);
+        f.NoSave();
     }
 
     [Fact]

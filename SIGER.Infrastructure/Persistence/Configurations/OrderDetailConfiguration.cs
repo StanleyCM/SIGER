@@ -14,9 +14,9 @@ public class OrderDetailConfiguration : IEntityTypeConfiguration<OrderDetail>
         builder.Property(detail => detail.OrderId).HasColumnName("id_orden").IsRequired();
         builder.Property(detail => detail.ProductId).HasColumnName("id_producto").IsRequired();
         builder.Property(detail => detail.Quantity).HasColumnName("cantidad").IsRequired();
-        builder.Property(detail => detail.UnitPrice).HasColumnName("precio_unitario").HasPrecision(10, 2).IsRequired();
+        builder.Property(detail => detail.UnitPrice).HasColumnName("precio_unitario").HasPrecision(12, 2).IsRequired();
         builder.Property(detail => detail.Subtotal).HasColumnName("subtotal").HasPrecision(12, 2).IsRequired();
-        builder.Property(detail => detail.Note).HasColumnName("nota").HasMaxLength(255);
+        builder.Property(detail => detail.Note).HasColumnName("notas").HasMaxLength(300);
 
         builder.HasIndex(detail => detail.OrderId).HasDatabaseName("ix_detalle_orden_id_orden");
         builder.HasIndex(detail => detail.ProductId).HasDatabaseName("ix_detalle_orden_id_producto");

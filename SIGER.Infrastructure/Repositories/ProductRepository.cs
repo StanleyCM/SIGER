@@ -15,12 +15,16 @@ public class ProductRepository : IProductRepository
     public Task<Product?> GetByIdAsync(long id, CancellationToken cancellationToken = default)
         => _context.Products.Include(product => product.Category).FirstOrDefaultAsync(product => product.Id == id, cancellationToken);
 
+    public async Task<IReadOnlyCollection<Product>> GetByIdsAsync(IReadOnlyCollection<long> ids, CancellationToken cancellationToken = default)
+        => ids.Count == 0 ? Array.Empty<Product>() : await _context.Products
+            .Where(product => ids.Contains(product.Id)).ToArrayAsync(cancellationToken);
+
     public async Task<PaginatedResult<Product>> GetPagedAsync(int pageNumber, int pageSize, long? categoryId = null, CancellationToken cancellationToken = default)
     {
         var query = _context.Products.AsNoTracking().Include(product => product.Category).AsQueryable();
         if (categoryId.HasValue) query = query.Where(product => product.CategoryId == categoryId.Value);
         var totalCount = await query.CountAsync(cancellationToken);
-        var items = await query.OrderBy(product => product.Name).Skip((pageNumber - 1) * pageSize).Take(pageSize).ToArrayAsync(cancellationToken);
+        var items = await query.OrderBy(product => product.Name).ThenBy(product => product.Id).Skip((pageNumber - 1) * pageSize).Take(pageSize).ToArrayAsync(cancellationToken);
         return new PaginatedResult<Product>(items, totalCount, pageNumber, pageSize);
     }
 

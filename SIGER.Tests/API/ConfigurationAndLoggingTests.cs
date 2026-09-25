@@ -16,7 +16,7 @@ using SIGER.API.Authorization;
 using SIGER.API.Extensions;
 using SIGER.API.Middleware;
 
-namespace SIGER.API.Tests;
+namespace SIGER.Tests.API;
 
 public class ConfigurationAndLoggingTests
 {

@@ -14,10 +14,33 @@ using SIGER.Application.Interfaces.Services;
 using SIGER.Domain.Enums;
 using SIGER.Domain.Exceptions;
 
-namespace SIGER.API.Tests;
+namespace SIGER.Tests.API;
 
 public class EndpointTests
 {
+    [Fact]
+    public async Task User_compensation_failure_returns_safe_operation_reference()
+    {
+        using var f = new ApiFactory(); using var client = f.Client("Administrador"); var operation = Guid.NewGuid();
+        f.Service<IUserService>().Setup(x => x.UpdateStatusAsync(1, It.IsAny<UpdateUserStatusRequestDto>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new SIGER.Application.Exceptions.UserOperationException(operation, true));
+        var response = await client.PatchAsJsonAsync("/api/v1/users/1/status", new { isActive = false });
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        var text = await response.Content.ReadAsStringAsync();
+        Assert.Contains(operation.ToString(), text); Assert.DoesNotContain("stack", text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("password", text, StringComparison.OrdinalIgnoreCase);
+    }
+    [Fact]
+    public async Task Overlapping_reservation_is_a_safe_conflict()
+    {
+        using var f = new ApiFactory(); using var client = f.Client("Mesero");
+        f.Service<IReservationService>().Setup(x => x.CreateAsync(It.IsAny<CreateReservationRequestDto>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Result<ReservationDto>.Failure("The table already has an overlapping reservation."));
+        var response = await client.PostAsJsonAsync("/api/v1/reservations", new
+        { userId = 42, tableId = 4, numberOfPeople = 2, reservationDateTime = DateTimeOffset.UtcNow.AddDays(1) });
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType!.MediaType);
+    }
     [Theory]
     [InlineData("/api/v1/users")] [InlineData("/api/v1/orders")] [InlineData("/api/v1/kitchen/orders")]
     [InlineData("/api/v1/payments/order/1")] [InlineData("/api/v1/reservations")]
@@ -30,20 +53,23 @@ public class EndpointTests
     }
 
     [Theory]
-    [InlineData("Administrator", "/api/v1/users", 200)]
-    [InlineData("Waiter", "/api/v1/users", 403)]
-    [InlineData("Waiter", "/api/v1/orders", 200)]
-    [InlineData("Cook", "/api/v1/kitchen/orders", 200)]
-    [InlineData("Cook", "/api/v1/payments/order/1", 403)]
-    [InlineData("Cashier", "/api/v1/payments/order/1", 200)]
-    [InlineData("Client", "/api/v1/orders", 403)]
-    [InlineData("Client", "/api/v1/reservations", 200)]
+    [InlineData("Administrador", "/api/v1/users", 200)]
+    [InlineData("Mesero", "/api/v1/users", 403)]
+    [InlineData("Mesero", "/api/v1/orders", 200)]
+    [InlineData("Cocinero", "/api/v1/kitchen/orders", 200)]
+    [InlineData("Cocinero", "/api/v1/users", 403)]
+    [InlineData("Cocinero", "/api/v1/payments/order/1", 403)]
+    [InlineData("Cajero", "/api/v1/payments/order/1", 200)]
+    [InlineData("Cajero", "/api/v1/users", 403)]
+    [InlineData("Cliente", "/api/v1/orders", 403)]
+    [InlineData("Cliente", "/api/v1/reservations", 200)]
+    [InlineData("Cliente", "/api/v1/users", 403)]
     [InlineData("Unknown", "/api/v1/users", 403)]
-    [InlineData("Administrator", "/api/v1/categories", 200)]
-    [InlineData("Administrator", "/api/v1/tables", 200)]
-    [InlineData("Administrator", "/api/v1/promotions", 200)]
-    [InlineData("Administrator", "/api/v1/reports/sales?startDate=2026-01-01&endDate=2026-01-02", 200)]
-    [InlineData("Administrator", "/api/v1/audits", 200)]
+    [InlineData("Administrador", "/api/v1/categories", 200)]
+    [InlineData("Administrador", "/api/v1/tables", 200)]
+    [InlineData("Administrador", "/api/v1/promotions", 200)]
+    [InlineData("Administrador", "/api/v1/reports/sales?startDate=2026-01-01&endDate=2026-01-02", 200)]
+    [InlineData("Administrador", "/api/v1/audits", 200)]
     public async Task Roles_enforce_controller_policies(string role, string path, int status)
     {
         using var f = new ApiFactory(); using var client = f.Client(role);
@@ -55,7 +81,7 @@ public class EndpointTests
     [InlineData("subject")] [InlineData("missing")] [InlineData("inactive")] [InlineData("inactive-role")] [InlineData("malformed")]
     public async Task Invalid_identity_is_rejected(string scenario)
     {
-        using var f = new ApiFactory(); using var client = f.Client("Administrator");
+        using var f = new ApiFactory(); using var client = f.Client("Administrador");
         if (scenario == "missing") f.UserExists = false;
         if (scenario == "inactive") f.LocalUser.IsActive = false;
         if (scenario == "inactive-role") f.LocalUser.Role.IsActive = false;
@@ -72,7 +98,7 @@ public class EndpointTests
     [Fact]
     public async Task Es256_is_accepted_and_token_roles_are_not_trusted()
     {
-        using var f = new ApiFactory(); using var client = f.Client("Waiter");
+        using var f = new ApiFactory(); using var client = f.Client("Mesero");
         client.DefaultRequestHeaders.Authorization = new("Bearer", f.Token(ecdsa: true, spoofRole: true));
         Assert.Equal(HttpStatusCode.Forbidden, (await client.GetAsync("/api/v1/users")).StatusCode);
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync("/api/v1/orders")).StatusCode);
@@ -81,7 +107,7 @@ public class EndpointTests
     [Fact]
     public async Task User_creation_returns_created_location_and_safe_dto()
     {
-        using var f = new ApiFactory(); using var client = f.Client("Administrator");
+        using var f = new ApiFactory(); using var client = f.Client("Administrador");
         f.Service<IUserService>().Setup(x => x.CreateAsync(It.IsAny<CreateUserRequestDto>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result<UserDto>.Success(new() { Id = 7, FirstName = "Ana" }));
         var response = await client.PostAsJsonAsync("/api/v1/users", new { roleId = 1, firstName = "Ana", lastName = "Diaz", email = "a@example.test", password = "synthetic-input" });
@@ -93,13 +119,13 @@ public class EndpointTests
     [Fact]
     public async Task Order_and_payment_use_trusted_local_user_and_item_route_id()
     {
-        using var f = new ApiFactory(); using var client = f.Client("Waiter");
+        using var f = new ApiFactory(); using var client = f.Client("Mesero");
         var created = await client.PostAsJsonAsync("/api/v1/orders", new { userId = 999, type = "TakeAway", origin = "Desktop", items = new[] { new { productId = 3, quantity = 1 } } });
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
         f.Service<IOrderService>().Verify(x => x.CreateOrderAsync(It.Is<CreateOrderRequestDto>(r => r.UserId == 42), It.IsAny<CancellationToken>()), Times.Once);
         Assert.Equal(HttpStatusCode.OK, (await client.PutAsJsonAsync("/api/v1/orders/5/items/6", new { orderDetailId = 999, quantity = 2 })).StatusCode);
         f.Service<IOrderService>().Verify(x => x.UpdateItemAsync(5, It.Is<UpdateOrderItemRequestDto>(r => r.OrderDetailId == 6), It.IsAny<CancellationToken>()), Times.Once);
-        f.LocalUser.Role.Name = "Cashier";
+        f.LocalUser.Role.Name = "Cajero";
         Assert.Equal(HttpStatusCode.Created, (await client.PostAsJsonAsync("/api/v1/payments", new { orderId = 5, userId = 999, amount = 25, method = "Cash" })).StatusCode);
         f.Service<IPaymentService>().Verify(x => x.ProcessPaymentAsync(It.Is<ProcessPaymentRequestDto>(r => r.UserId == 42), It.IsAny<CancellationToken>()), Times.Once);
     }
@@ -107,7 +133,7 @@ public class EndpointTests
     [Fact]
     public async Task Waiter_cannot_bypass_payment_or_kitchen_workflows()
     {
-        using var f = new ApiFactory(); using var client = f.Client("Waiter");
+        using var f = new ApiFactory(); using var client = f.Client("Mesero");
         Assert.Equal(HttpStatusCode.Forbidden, (await client.PatchAsJsonAsync("/api/v1/orders/5/status", new { status = "Paid", version = 1 })).StatusCode);
         f.Service<IOrderService>().Verify(x => x.UpdateStatusAsync(It.IsAny<long>(), It.IsAny<UpdateOrderStatusRequestDto>(), It.IsAny<CancellationToken>()), Times.Never);
         Assert.Equal(HttpStatusCode.OK, (await client.PatchAsJsonAsync("/api/v1/orders/5/status", new { status = "Served", version = 1 })).StatusCode);
@@ -117,7 +143,7 @@ public class EndpointTests
     [Fact]
     public async Task Client_reservations_cannot_access_or_assign_other_users()
     {
-        using var f = new ApiFactory(); using var client = f.Client("Client");
+        using var f = new ApiFactory(); using var client = f.Client("Cliente");
         f.Service<IReservationService>().Setup(x => x.GetByIdAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result<ReservationDto>.Success(new() { Id = 1, UserId = 99 }));
         Assert.Equal(HttpStatusCode.Forbidden, (await client.GetAsync("/api/v1/reservations/1")).StatusCode);
@@ -138,7 +164,7 @@ public class EndpointTests
     [InlineData("First name is required.", 400)]
     public async Task Result_failures_are_not_200(string error, int status)
     {
-        using var f = new ApiFactory(); using var client = f.Client("Administrator");
+        using var f = new ApiFactory(); using var client = f.Client("Administrador");
         f.Service<IUserService>().Setup(x => x.GetByIdAsync(1, It.IsAny<CancellationToken>())).ReturnsAsync(Result<UserDto>.Failure(error));
         Assert.Equal(status, (int)(await client.GetAsync("/api/v1/users/1")).StatusCode);
     }
@@ -148,14 +174,14 @@ public class EndpointTests
     [InlineData("/api/v1/orders?status=999")] [InlineData("/api/v1/reports/sales")]
     public async Task Model_binding_rejects_bad_filters(string path)
     {
-        using var f = new ApiFactory(); using var client = f.Client("Administrator");
+        using var f = new ApiFactory(); using var client = f.Client("Administrador");
         Assert.Equal(HttpStatusCode.BadRequest, (await client.GetAsync(path)).StatusCode);
     }
 
     [Fact]
     public async Task Invalid_json_and_integer_enums_are_rejected()
     {
-        using var f = new ApiFactory(); using var client = f.Client("Waiter");
+        using var f = new ApiFactory(); using var client = f.Client("Mesero");
         var response = await client.PatchAsJsonAsync("/api/v1/orders/5/status", new { status = 4, version = 1 });
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         response = await client.PostAsync("/api/v1/orders", new StringContent("{ invalid", Encoding.UTF8, "application/json"));
@@ -214,7 +240,7 @@ public class EndpointTests
     [InlineData("business", 409)] [InlineData("concurrency", 409)] [InlineData("domain", 400)] [InlineData("unexpected", 500)]
     public async Task Exception_mapping_never_discloses_internal_details(string kind, int status)
     {
-        using var f = new ApiFactory(); using var client = f.Client("Administrator");
+        using var f = new ApiFactory(); using var client = f.Client("Administrador");
         const string sensitive = "PRIVATE_SQL_CONNECTION_TOKEN";
         Exception error = kind switch
         {
@@ -233,4 +259,3 @@ public class EndpointTests
         Assert.DoesNotContain(sensitive, body); Assert.DoesNotContain("StackTrace", body); Assert.Contains("traceId", body);
     }
 }
-

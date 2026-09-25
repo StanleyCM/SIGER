@@ -16,7 +16,7 @@ public class PromotionConfiguration : IEntityTypeConfiguration<Promotion>
         builder.Property(promotion => promotion.DiscountPercentage).HasColumnName("porcentaje_descuento").HasPrecision(5, 2).IsRequired();
         builder.Property(promotion => promotion.StartDate).HasColumnName("fecha_inicio").HasColumnType("timestamp with time zone").IsRequired();
         builder.Property(promotion => promotion.EndDate).HasColumnName("fecha_fin").HasColumnType("timestamp with time zone").IsRequired();
-        builder.Property(promotion => promotion.IsActive).HasColumnName("activo").IsRequired();
+        builder.Property(promotion => promotion.IsActive).HasColumnName("estado").IsRequired();
         builder.Property(promotion => promotion.CreatedAt).HasColumnName("fecha_creacion").HasColumnType("timestamp with time zone").IsRequired();
         builder.HasIndex(promotion => new { promotion.IsActive, promotion.StartDate, promotion.EndDate })
             .HasDatabaseName("ix_promocion_vigencia");

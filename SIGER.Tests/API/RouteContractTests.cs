@@ -4,7 +4,7 @@ using Moq;
 using SIGER.Application.Base;
 using SIGER.Application.DTOs.Reservations;
 using SIGER.Application.Interfaces.Services;
-namespace SIGER.API.Tests;
+namespace SIGER.Tests.API;
 
 public class RouteContractTests
 {
@@ -44,7 +44,7 @@ public class RouteContractTests
     [InlineData("DELETE", "promotions/1/products/2", "", 204)]
     public async Task Administrator_routes_bind_and_return_expected_success_codes(string method, string path, string body, int status)
     {
-        using var f = new ApiFactory(); using var client = f.Client("Administrator");
+        using var f = new ApiFactory(); using var client = f.Client("Administrador");
         using var request = new HttpRequestMessage(new HttpMethod(method), "/api/v1/" + path);
         if (body.Length > 0) request.Content = new StringContent(body, Encoding.UTF8, "application/json");
         Assert.Equal(status, (int)(await client.SendAsync(request)).StatusCode);
@@ -54,7 +54,7 @@ public class RouteContractTests
     [InlineData("PUT")] [InlineData("PATCH")]
     public async Task Missing_reservation_is_not_updated(string method)
     {
-        using var f = new ApiFactory(); using var client = f.Client("Client");
+        using var f = new ApiFactory(); using var client = f.Client("Cliente");
         f.Service<IReservationService>().Setup(x => x.GetByIdAsync(1, It.IsAny<CancellationToken>()))
             .ReturnsAsync(Result<ReservationDto>.Failure("Reservation not found."));
         var path = "/api/v1/reservations/1" + (method == "PATCH" ? "/status" : "");
@@ -66,9 +66,8 @@ public class RouteContractTests
     [Fact]
     public async Task Production_does_not_expose_swagger_or_openapi()
     {
-        using var f = new ApiFactory { EnvironmentName = "Production" }; using var client = f.Client("Administrator");
+        using var f = new ApiFactory { EnvironmentName = "Production" }; using var client = f.Client("Administrador");
         Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/swagger/index.html")).StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/openapi/v1.json")).StatusCode);
     }
 }
-

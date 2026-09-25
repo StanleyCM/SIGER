@@ -15,13 +15,23 @@ public class UserRepository : IUserRepository
     public Task<User?> GetByIdAsync(long id, CancellationToken cancellationToken = default)
         => _context.Users.Include(user => user.Role).FirstOrDefaultAsync(user => user.Id == id, cancellationToken);
 
+    public async Task<User?> GetByIdForUpdateAsync(long id, CancellationToken cancellationToken = default)
+    {
+        if (_context.Database.CurrentTransaction is null)
+            throw new InvalidOperationException("A transaction is required to lock a user.");
+        var user = await _context.Users.FromSqlInterpolated($"SELECT * FROM public.usuario WHERE id_usuario = {id} FOR UPDATE")
+            .SingleOrDefaultAsync(cancellationToken);
+        if (user is not null) await _context.Entry(user).ReloadAsync(cancellationToken);
+        return user;
+    }
+
     public Task<User?> GetByAuthUserIdAsync(Guid authUserId, CancellationToken cancellationToken = default)
         => _context.Users.AsNoTracking().Include(user => user.Role)
             .FirstOrDefaultAsync(user => user.AuthUserId == authUserId, cancellationToken);
 
     public Task<User?> GetByEmailAsync(string email, CancellationToken cancellationToken = default)
         => _context.Users.AsNoTracking().Include(user => user.Role)
-            .FirstOrDefaultAsync(user => user.Email == email, cancellationToken);
+            .FirstOrDefaultAsync(user => user.Email.ToLower() == email.ToLower(), cancellationToken);
 
     public async Task<PaginatedResult<User>> GetPagedAsync(int pageNumber, int pageSize, string? search = null, bool? isActive = null, CancellationToken cancellationToken = default)
     {

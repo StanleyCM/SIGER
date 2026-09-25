@@ -20,7 +20,7 @@ public class PaymentConfiguration : IEntityTypeConfiguration<Payment>
         builder.Property(payment => payment.PaymentDate).HasColumnName("fecha_pago").HasColumnType("timestamp with time zone").IsRequired();
         builder.Property(payment => payment.UpdatedAt).HasColumnName("fecha_actualizacion").HasColumnType("timestamp with time zone").IsRequired();
 
-        builder.HasIndex(payment => payment.OrderId).HasDatabaseName("ix_pago_id_orden");
+        builder.HasIndex(payment => payment.OrderId).IsUnique().HasDatabaseName("ix_pago_id_orden");
         builder.HasIndex(payment => payment.UserId).HasDatabaseName("ix_pago_id_usuario");
 
         builder.HasOne(payment => payment.Order)

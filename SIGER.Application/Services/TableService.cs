@@ -42,7 +42,7 @@ public class TableService : ITableService
 
     public async Task<Result<PaginatedResult<TableDto>>> GetPagedAsync(int pageNumber, int pageSize, CancellationToken cancellationToken = default)
     {
-        if (pageNumber < 1 || pageSize < 1) return Result<PaginatedResult<TableDto>>.Failure("Page number and page size must be greater than zero.");
+        if (pageNumber < 1 || pageSize < 1 || pageSize > 200 || ((long)pageNumber - 1) * pageSize > int.MaxValue) return Result<PaginatedResult<TableDto>>.Failure("Page number and size must be positive, size at most 200, and offset within the supported range.");
         var page = await _tableRepository.GetPagedAsync(pageNumber, pageSize, cancellationToken);
         return Result<PaginatedResult<TableDto>>.Success(new(page.Items.Select(Map), page.TotalCount, page.PageNumber, page.PageSize));
     }

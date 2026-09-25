@@ -9,7 +9,7 @@ using SIGER.Infrastructure.Authentication;
 using SIGER.Infrastructure.Persistence;
 using Work = SIGER.Infrastructure.UnitOfWork.UnitOfWork;
 
-namespace SIGER.Infrastructure.Tests;
+namespace SIGER.Tests.Infrastructure;
 
 public class AuthProviderTests
 {
@@ -69,9 +69,9 @@ public class AuthProviderTests
     public async Task Create_user_maps_id_and_admin_contract()
     {
         var id = Guid.NewGuid();
-        using var handler = new Handler(HttpStatusCode.OK, $$"""{"id":"{{id}}"}""");
+        using var handler = new Handler(HttpStatusCode.OK, JsonSerializer.Serialize(new { id, email = "a@example.test", created_at = DateTimeOffset.UtcNow, updated_at = DateTimeOffset.UtcNow }));
         using var client = new HttpClient(handler) { BaseAddress = new("https://test.invalid/auth/v1/") };
-        Assert.Equal(id, await new SupabaseAuthService(client).CreateUserAsync("a@example.test", "synthetic-input"));
+        Assert.Equal(id, (await new SupabaseAuthService(client).CreateUserAsync(id, Guid.NewGuid(), "a@example.test", "synthetic-input")).Id);
         Assert.Equal("/auth/v1/admin/users", handler.Path);
         using var body = JsonDocument.Parse(handler.Body!);
         Assert.True(body.RootElement.GetProperty("email_confirm").GetBoolean());
@@ -82,7 +82,7 @@ public class AuthProviderTests
     public async Task Invalid_create_response_cannot_create_empty_local_identity(string response)
     {
         using var client = new HttpClient(new Handler(HttpStatusCode.OK, response)) { BaseAddress = new("https://test.invalid/") };
-        var error = await Assert.ThrowsAsync<HttpRequestException>(() => new SupabaseAuthService(client).CreateUserAsync("a", "b"));
+        var error = await Assert.ThrowsAsync<HttpRequestException>(() => new SupabaseAuthService(client).CreateUserAsync(Guid.NewGuid(), Guid.NewGuid(), "a", "b"));
         Assert.DoesNotContain(response, error.Message); Assert.Null(error.InnerException);
     }
 
@@ -91,10 +91,10 @@ public class AuthProviderTests
     public async Task Enable_disable_use_admin_update(bool enable, string duration)
     {
         var id = Guid.NewGuid();
-        using var handler = new Handler(HttpStatusCode.OK, "{}");
+        using var handler = new Handler(HttpStatusCode.OK, JsonSerializer.Serialize(new { id, email = "a@example.test", created_at = DateTimeOffset.UtcNow, updated_at = DateTimeOffset.UtcNow }));
         using var client = new HttpClient(handler) { BaseAddress = new("https://test.invalid/auth/v1/") };
         var service = new SupabaseAuthService(client);
-        if (enable) await service.EnableUserAsync(id); else await service.DisableUserAsync(id);
+        await service.SetActiveAsync(id, Guid.NewGuid(), enable);
         Assert.Equal(HttpMethod.Put, handler.Method); Assert.Equal($"/auth/v1/admin/users/{id:D}", handler.Path);
         using var body = JsonDocument.Parse(handler.Body!);
         Assert.Equal(duration, body.RootElement.GetProperty("ban_duration").GetString());
@@ -104,7 +104,7 @@ public class AuthProviderTests
     public async Task Remote_errors_do_not_expose_remote_body()
     {
         using var client = new HttpClient(new Handler(HttpStatusCode.InternalServerError, "PRIVATE_REMOTE_CONTENT")) { BaseAddress = new("https://test.invalid/") };
-        var error = await Assert.ThrowsAsync<HttpRequestException>(() => new SupabaseAuthService(client).CreateUserAsync("a", "b"));
+        var error = await Assert.ThrowsAsync<HttpRequestException>(() => new SupabaseAuthService(client).CreateUserAsync(Guid.NewGuid(), Guid.NewGuid(), "a", "b"));
         Assert.Equal(HttpStatusCode.InternalServerError, error.StatusCode);
         Assert.DoesNotContain("PRIVATE_REMOTE_CONTENT", error.ToString());
     }
