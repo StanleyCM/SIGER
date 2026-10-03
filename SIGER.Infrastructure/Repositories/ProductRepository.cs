@@ -12,6 +12,18 @@ public class ProductRepository : IProductRepository
 
     public ProductRepository(SIGERDbContext context) => _context = context;
 
+    public async Task<PaginatedResult<Product>> GetPublicPagedAsync(int pageNumber, int pageSize, long? categoryId, CancellationToken cancellationToken = default)
+    {
+        var query = _context.Products.AsNoTracking().Include(p => p.Category)
+            .Where(p => p.IsAvailable && p.Category.IsActive && (!categoryId.HasValue || p.CategoryId == categoryId));
+        var count = await query.CountAsync(cancellationToken);
+        var items = await query.OrderBy(p => p.Name).ThenBy(p => p.Id).Skip((pageNumber - 1) * pageSize).Take(pageSize).ToArrayAsync(cancellationToken);
+        return new(items, count, pageNumber, pageSize);
+    }
+
+    public async Task<IReadOnlyCollection<Product>> GetWithCategoriesByIdsAsync(IReadOnlyCollection<long> ids, CancellationToken cancellationToken = default)
+        => await _context.Products.Include(p => p.Category).Where(p => ids.Contains(p.Id)).ToArrayAsync(cancellationToken);
+
     public Task<Product?> GetByIdAsync(long id, CancellationToken cancellationToken = default)
         => _context.Products.Include(product => product.Category).FirstOrDefaultAsync(product => product.Id == id, cancellationToken);
 

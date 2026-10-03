@@ -11,7 +11,7 @@ public class ReservationConfiguration : IEntityTypeConfiguration<Reservation>
         builder.ToTable("reserva");
         builder.HasKey(reservation => reservation.Id).HasName("pk_reserva");
         builder.Property(reservation => reservation.Id).HasColumnName("id_reserva").UseIdentityByDefaultColumn();
-        builder.Property(reservation => reservation.UserId).HasColumnName("id_usuario").IsRequired();
+        builder.Property(reservation => reservation.UserId).HasColumnName("id_usuario").IsRequired(false);
         builder.Property(reservation => reservation.TableId).HasColumnName("id_mesa").IsRequired();
         builder.Property(reservation => reservation.ReservationDateTime).HasColumnName("fecha_hora").HasColumnType("timestamp with time zone").IsRequired();
         builder.Property(reservation => reservation.NumberOfPeople).HasColumnName("cantidad_personas").IsRequired();
@@ -19,6 +19,14 @@ public class ReservationConfiguration : IEntityTypeConfiguration<Reservation>
         builder.Property(reservation => reservation.Notes).HasColumnName("observaciones").HasMaxLength(500);
         builder.Property(reservation => reservation.CreatedAt).HasColumnName("fecha_creacion").HasColumnType("timestamp with time zone").IsRequired();
         builder.Property(reservation => reservation.UpdatedAt).HasColumnName("fecha_actualizacion").HasColumnType("timestamp with time zone").IsRequired();
+
+        builder.Property(r => r.ContactName).HasColumnName("nombre_contacto").HasMaxLength(150);
+        builder.Property(r => r.ContactPhone).HasColumnName("telefono_contacto").HasMaxLength(30);
+        builder.Property(r => r.ContactEmail).HasColumnName("email_contacto").HasMaxLength(150);
+        builder.Property(r => r.AccessTokenHash).HasColumnName("token_acceso_hash").HasColumnType("bytea");
+        builder.Property(r => r.AccessTokenExpiresAt).HasColumnName("token_acceso_expira").HasColumnType("timestamp with time zone");
+        builder.HasIndex(r => r.AccessTokenHash).IsUnique().HasFilter("token_acceso_hash IS NOT NULL").HasDatabaseName("ux_reserva_token_acceso_hash");
+        builder.HasIndex(r => new { r.TableId, r.ReservationDateTime }).HasDatabaseName("ix_reserva_mesa_fecha_disponibilidad");
 
         builder.HasIndex(reservation => reservation.ReservationDateTime).HasDatabaseName("ix_reserva_fecha_hora");
         builder.HasIndex(reservation => reservation.UserId).HasDatabaseName("ix_reserva_id_usuario");

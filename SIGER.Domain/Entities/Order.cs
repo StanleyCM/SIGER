@@ -6,7 +6,8 @@ namespace SIGER.Domain.Entities;
 public class Order : BaseEntity
 {
     public long? TableId { get; set; }
-    public long UserId { get; set; }
+    public long? UserId { get; set; }
+    public long? ReservationId { get; set; }
     public long? ClientId { get; set; }
 
     public DateTimeOffset OrderDateTime { get; set; }
@@ -26,7 +27,8 @@ public class Order : BaseEntity
     public long Version { get; set; }
 
     public Table? Table { get; set; }
-    public User User { get; set; } = null!;
+    public User? User { get; set; }
+    public Reservation? Reservation { get; set; }
     public User? Client { get; set; }
 
     public ICollection<OrderDetail> Details { get; set; } = new List<OrderDetail>();

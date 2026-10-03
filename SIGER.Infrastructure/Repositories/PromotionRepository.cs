@@ -44,7 +44,7 @@ public sealed class PromotionRepository(SIGERDbContext context) : IPromotionRepo
             .Where(promotion => promotion.IsActive && promotion.StartDate <= at && promotion.EndDate >= at)
             .OrderBy(promotion => promotion.EndDate)
             .Include(promotion => promotion.PromotionProducts)
-                .ThenInclude(promotionProduct => promotionProduct.Product)
+                .ThenInclude(promotionProduct => promotionProduct.Product).ThenInclude(product => product.Category)
             .AsSplitQuery()
             .ToListAsync(cancellationToken);
 

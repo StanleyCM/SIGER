@@ -1,5 +1,7 @@
 # SIGER
 
+> 03/10/2026: backend de invitados y preórdenes implementado localmente. **DDL de Supabase pendiente de autorización; no desplegar con el esquema anterior.** Ver [contrato, SQL propuesto y validación](docs/ENTREGABLE_3_BACKEND.md). Web y Desktop quedan fuera de esta etapa.
+
 Sistema de gestión de restaurante. Backend .NET 10 / ASP.NET Core, EF Core/Npgsql sobre
 PostgreSQL existente en Supabase y autenticación Supabase Auth. Desktop y Web no están
 implementados en esta etapa.

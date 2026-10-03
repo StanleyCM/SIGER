@@ -16,6 +16,7 @@ public static class ResultHttpExtensions
     ];
     private static readonly HashSet<string> ConflictErrors =
     [
+        "A preorder is not operational.", "A preorder already exists for this reservation.", "No table is available for this reservation.",
         "A user with this email already exists.", "The order is already paid.",
         "A cancelled order cannot be paid.", "A payment already exists for this order.",
         "The selected table is not available.", "Paid or cancelled orders cannot be modified.",

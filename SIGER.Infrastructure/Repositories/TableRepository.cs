@@ -13,6 +13,10 @@ public class TableRepository : ITableRepository
 
     public TableRepository(SIGERDbContext context) => _context = context;
 
+    public async Task<IReadOnlyCollection<long>> GetReservationCandidateIdsAsync(int people, CancellationToken cancellationToken = default)
+        => await _context.Tables.AsNoTracking().Where(t => t.Status != TableStatus.OutOfService && t.Capacity >= people)
+            .OrderBy(t => t.Id).Select(t => t.Id).ToArrayAsync(cancellationToken);
+
     public Task<Table?> GetByIdAsync(long id, CancellationToken cancellationToken = default)
         => _context.Tables.FirstOrDefaultAsync(table => table.Id == id, cancellationToken);
 

@@ -141,7 +141,7 @@ public class ModelTests
         }
         var order = model.FindEntityType(typeof(Order))!;
         Assert.True(order.FindProperty("TableId")!.IsNullable); Assert.True(order.FindProperty("ClientId")!.IsNullable);
-        Assert.False(order.FindProperty("UserId")!.IsNullable);
+        Assert.True(order.FindProperty("UserId")!.IsNullable);
         Assert.Equal("CreatedOrders", order.FindNavigation("User")!.Inverse!.Name);
         Assert.Equal("ClientOrders", order.FindNavigation("Client")!.Inverse!.Name);
     }
@@ -175,7 +175,7 @@ public class ModelTests
         Assert.Equal(150, model.FindEntityType(typeof(User))!.FindProperty("Email")!.GetMaxLength());
         Assert.Null(model.FindEntityType(typeof(Product))!.FindProperty("ImageUrl")!.GetMaxLength());
         Assert.Equal(300, model.FindEntityType(typeof(OrderDetail))!.FindProperty("Note")!.GetMaxLength());
-        Assert.Equal(5, model.GetEntityTypes().SelectMany(e => e.GetIndexes()).Count(i => i.IsUnique));
+        Assert.Equal(7, model.GetEntityTypes().SelectMany(e => e.GetIndexes()).Count(i => i.IsUnique));
         Assert.All(model.GetEntityTypes().SelectMany(e => e.GetIndexes()), i => Assert.False(string.IsNullOrWhiteSpace(i.GetDatabaseName())));
     }
 
@@ -187,7 +187,7 @@ public class ModelTests
         var enums = model.GetPostgresEnums().ToDictionary(e => e.Name, e => e.Labels);
         Assert.Equal(7, enums.Count);
         Assert.Equal(new[] { "Disponible", "Ocupada", "Reservada", "FueraServicio" }.Order(), enums["estado_mesa"].Order());
-        Assert.Equal(new[] { "Pendiente", "EnPreparacion", "Lista", "Servida", "Pagada", "Cancelada" }.Order(), enums["estado_orden"].Order());
+        Assert.Equal(new[] { "Pendiente", "EnPreparacion", "Lista", "Servida", "Pagada", "Cancelada", "Preordenada" }.Order(), enums["estado_orden"].Order());
         Assert.Equal(new[] { "Efectivo", "Tarjeta", "Transferencia", "Otro" }.Order(), enums["metodo_pago"].Order());
         Assert.Equal(new[] { "Pendiente", "Completado", "Fallido", "Reembolsado" }.Order(), enums["estado_pago"].Order());
         Assert.Equal(new[] { "Desktop", "Web" }.Order(), enums["origen_orden"].Order());

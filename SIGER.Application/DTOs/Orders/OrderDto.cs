@@ -7,7 +7,8 @@ public sealed class OrderDto
     public long Id { get; set; }
     public long? TableId { get; set; }
     public int? TableNumber { get; set; }
-    public long UserId { get; set; }
+    public long? UserId { get; set; }
+    public long? ReservationId { get; set; }
     public long? ClientId { get; set; }
     public DateTimeOffset OrderDateTime { get; set; }
     public OrderStatus Status { get; set; }

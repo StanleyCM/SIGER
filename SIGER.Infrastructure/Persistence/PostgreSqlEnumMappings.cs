@@ -21,7 +21,8 @@ internal static class PostgreSqlEnumMappings
         [OrderStatus.Ready] = "Lista",
         [OrderStatus.Served] = "Servida",
         [OrderStatus.Paid] = "Pagada",
-        [OrderStatus.Cancelled] = "Cancelada"
+        [OrderStatus.Cancelled] = "Cancelada",
+        [OrderStatus.PreOrdered] = "Preordenada"
     });
 
     private static readonly PostgreSqlEnumNameTranslator PaymentMethodTranslator = CreateTranslator(new Dictionary<PaymentMethod, string>

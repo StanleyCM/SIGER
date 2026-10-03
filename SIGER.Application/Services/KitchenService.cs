@@ -48,7 +48,7 @@ public class KitchenService : IKitchenService
 
     private static OrderDto Map(Order order) => new()
     {
-        Id = order.Id, TableId = order.TableId, TableNumber = order.Table?.Number, UserId = order.UserId, ClientId = order.ClientId,
+        Id = order.Id, ReservationId = order.ReservationId, TableId = order.TableId, TableNumber = order.Table?.Number, UserId = order.UserId, ClientId = order.ClientId,
         OrderDateTime = order.OrderDateTime, Status = order.Status, Origin = order.Origin, Type = order.Type, Total = order.Total,
         Notes = order.Notes, AccountRequested = order.AccountRequested, UpdatedAt = order.UpdatedAt, Version = order.Version,
         Details = order.Details.Select(detail => new OrderDetailDto

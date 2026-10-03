@@ -5,6 +5,7 @@ namespace SIGER.Application.Interfaces.Repositories;
 
 public interface ITableRepository
 {
+    Task<IReadOnlyCollection<long>> GetReservationCandidateIdsAsync(int people, CancellationToken cancellationToken = default);
     Task<Table?> GetByIdAsync(long id, CancellationToken cancellationToken = default);
     // Requires a transaction; serializes availability checks for this table.
     Task<Table?> GetByIdForUpdateAsync(long id, CancellationToken cancellationToken = default);

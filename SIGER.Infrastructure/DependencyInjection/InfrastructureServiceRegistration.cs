@@ -29,6 +29,8 @@ public static class InfrastructureServiceRegistration
             options.UseNpgsql(connectionString, npgsql => npgsql.MapSIGEREnums()));
         services.TryAddSingleton<IAuditActor, InternalAuditActor>();
 
+        services.AddSingleton<IGuestReservationTokenService, SIGER.Infrastructure.Security.GuestReservationTokenService>();
+        services.TryAddSingleton(TimeProvider.System);
         services.AddScoped<IRoleRepository, RoleRepository>();
         services.AddScoped<IUserRepository, UserRepository>();
         services.AddScoped<ICategoryRepository, CategoryRepository>();

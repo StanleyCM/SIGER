@@ -7,5 +7,6 @@ public enum OrderStatus
     Ready,
     Served,
     Paid,
-    Cancelled
+    Cancelled,
+    PreOrdered = 6
 }

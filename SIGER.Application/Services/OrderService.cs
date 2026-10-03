@@ -194,6 +194,7 @@ public class OrderService : IOrderService
     {
         var order = await _orderRepository.GetWithDetailsAsync(orderId, cancellationToken);
         if (order is null) return Result<OrderDto>.Failure("Order not found.");
+        if (order.Status == OrderStatus.PreOrdered) return Result<OrderDto>.Failure("A preorder is not operational.");
         if (order.Status is OrderStatus.Paid or OrderStatus.Cancelled) return Result<OrderDto>.Failure("A paid or cancelled order cannot request an account.");
         if (order.Version != request.Version) throw new BusinessRuleException("The order changed. Reload it and try again.");
         order.AccountRequested = request.AccountRequested;
@@ -204,7 +205,7 @@ public class OrderService : IOrderService
     }
 
     private static string? ValidateEditable(Order? order)
-        => order is null ? "Order not found." : order.Status is OrderStatus.Paid or OrderStatus.Cancelled ? "Paid or cancelled orders cannot be modified." : null;
+        => order is null ? "Order not found." : order.Status == OrderStatus.PreOrdered ? "A preorder is not operational." : order.Status is OrderStatus.Paid or OrderStatus.Cancelled ? "Paid or cancelled orders cannot be modified." : null;
 
     private static OrderDetail CreateDetail(Order order, Product product, int quantity, string? note) => new()
     {
@@ -217,7 +218,7 @@ public class OrderService : IOrderService
 
     private static OrderDto Map(Order order) => new()
     {
-        Id = order.Id, TableId = order.TableId, TableNumber = order.Table?.Number, UserId = order.UserId, ClientId = order.ClientId,
+        Id = order.Id, ReservationId = order.ReservationId, TableId = order.TableId, TableNumber = order.Table?.Number, UserId = order.UserId, ClientId = order.ClientId,
         OrderDateTime = order.OrderDateTime, Status = order.Status, Origin = order.Origin, Type = order.Type, Total = order.Total,
         Notes = order.Notes, AccountRequested = order.AccountRequested, UpdatedAt = order.UpdatedAt, Version = order.Version,
         Details = order.Details.Select(detail => new OrderDetailDto

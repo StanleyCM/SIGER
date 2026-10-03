@@ -31,6 +31,7 @@ public class SIGERDbContext : DbContext
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(SIGERDbContext).Assembly);
+        if (Database.IsNpgsql()) Configurations.GuestPreOrderConstraints.Configure(modelBuilder);
         base.OnModelCreating(modelBuilder);
     }
 

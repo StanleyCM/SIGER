@@ -13,6 +13,10 @@ public class OrderRepository : IOrderRepository
 
     public OrderRepository(SIGERDbContext context) => _context = context;
 
+    public Task<Order?> GetByReservationIdAsync(long reservationId, CancellationToken cancellationToken = default)
+        => _context.Orders.Include(o => o.Details).ThenInclude(d => d.Product)
+            .SingleOrDefaultAsync(o => o.ReservationId == reservationId, cancellationToken);
+
     public Task<Order?> GetByIdAsync(long id, CancellationToken cancellationToken = default)
         => _context.Orders.Include(order => order.Table).Include(order => order.User).Include(order => order.Client)
             .FirstOrDefaultAsync(order => order.Id == id, cancellationToken);
@@ -22,7 +26,7 @@ public class OrderRepository : IOrderRepository
 
     public Task<bool> HasActiveOrdersAsync(long tableId, long excludingOrderId, CancellationToken cancellationToken = default)
         => _context.Orders.AnyAsync(order => order.TableId == tableId && order.Id != excludingOrderId &&
-            order.Status != OrderStatus.Paid && order.Status != OrderStatus.Cancelled, cancellationToken);
+            order.Status != OrderStatus.PreOrdered && order.Status != OrderStatus.Paid && order.Status != OrderStatus.Cancelled, cancellationToken);
 
     public async Task<PaginatedResult<Order>> GetPagedAsync(
         int pageNumber,

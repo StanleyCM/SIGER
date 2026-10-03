@@ -61,6 +61,9 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IKitchenService, KitchenService>();
         services.AddScoped<IPaymentService, PaymentService>();
         services.AddScoped<IReservationService, ReservationService>();
+        services.AddScoped<IGuestReservationService, GuestReservationService>();
+        services.AddScoped<IPreOrderService, PreOrderService>();
+        services.AddScoped<IPublicCatalogService, PublicCatalogService>();
         services.AddScoped<IPromotionService, PromotionService>();
         services.AddScoped<IReportService, ReportService>();
         services.AddScoped<IAuditService, AuditService>();
@@ -125,6 +128,13 @@ public static class ServiceCollectionExtensions
                 {
                     PermitLimit = Math.Max(1, configuration.GetValue("RateLimiting:LoginPermitLimit", 5)),
                     Window = TimeSpan.FromMinutes(1), QueueLimit = 0, AutoReplenishment = true
+                }));
+            options.AddPolicy("PublicWrite", context => RateLimitPartition.GetFixedWindowLimiter(
+                context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+                _ => new FixedWindowRateLimiterOptions
+                {
+                    PermitLimit = Math.Max(1, configuration.GetValue("RateLimiting:PublicWritePermitLimit", 5)),
+                    Window = TimeSpan.FromMinutes(15), QueueLimit = 0, AutoReplenishment = true
                 }));
             options.AddPolicy("Public", context => RateLimitPartition.GetFixedWindowLimiter(
                 context.Connection.RemoteIpAddress?.ToString() ?? "unknown",

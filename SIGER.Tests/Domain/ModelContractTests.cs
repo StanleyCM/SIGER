@@ -30,7 +30,7 @@ public class ModelContractTests
 
     [Theory]
     [InlineData(typeof(TableStatus), "Available,Occupied,Reserved,OutOfService")]
-    [InlineData(typeof(OrderStatus), "Pending,InPreparation,Ready,Served,Paid,Cancelled")]
+    [InlineData(typeof(OrderStatus), "Pending,InPreparation,Ready,Served,Paid,Cancelled,PreOrdered")]
     [InlineData(typeof(PaymentMethod), "Cash,Card,Transfer,Other")]
     [InlineData(typeof(PaymentStatus), "Pending,Completed,Failed,Refunded")]
     [InlineData(typeof(OrderOrigin), "Desktop,Web")]
@@ -66,7 +66,7 @@ public class ModelContractTests
         Assert.Null(audit.PreviousData); Assert.Null(audit.NewData); Assert.Null(audit.IpAddress);
         var nullability = new NullabilityInfoContext();
         Assert.Equal(NullabilityState.Nullable, nullability.Create(typeof(Order).GetProperty("Client")!).ReadState);
-        Assert.Equal(NullabilityState.NotNull, nullability.Create(typeof(Order).GetProperty("User")!).ReadState);
+        Assert.Equal(NullabilityState.Nullable, nullability.Create(typeof(Order).GetProperty("User")!).ReadState);
     }
 
     [Fact]

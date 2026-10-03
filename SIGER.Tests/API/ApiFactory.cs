@@ -31,6 +31,7 @@ internal sealed class ApiFactory : WebApplicationFactory<Program>
     public bool UserExists { get; set; } = true;
     public int LoginLimit { get; set; } = 100;
     public int PublicLimit { get; set; } = 100;
+    public string AllowedOrigin { get; set; } = "https://allowed.example.test";
     public string EnvironmentName { get; set; } = "Development";
     public Action<IServiceCollection>? ConfigureBackend { get; set; }
     public Mock<IUserRepository> Users { get; } = new();
@@ -59,7 +60,7 @@ internal sealed class ApiFactory : WebApplicationFactory<Program>
             ["Supabase:ServiceRoleKey"] = "synthetic-test-only",
             ["Supabase:JwtIssuer"] = Issuer,
             ["Supabase:JwtAudience"] = "authenticated",
-            ["Cors:AllowedOrigins:0"] = "https://allowed.example.test",
+            ["Cors:AllowedOrigins:0"] = AllowedOrigin,
             ["RateLimiting:LoginPermitLimit"] = LoginLimit.ToString(),
             ["RateLimiting:PublicPermitLimit"] = PublicLimit.ToString()
         };

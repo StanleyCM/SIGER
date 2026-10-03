@@ -1,5 +1,7 @@
 # SIGER API
 
+> 03/10/2026: backend de invitados y preórdenes implementado localmente. **DDL de Supabase pendiente de autorización; no desplegar con el esquema anterior.** Ver [contrato, SQL propuesto y validación](../docs/ENTREGABLE_3_BACKEND.md). Web y Desktop quedan fuera de esta etapa.
+
 API HTTP/JSON versionada bajo `/api/v1`. El esquema PostgreSQL existe previamente:
 el arranque no crea, migra ni elimina tablas. Los servicios de Application y
 Infrastructure se registran con sus contratos existentes.

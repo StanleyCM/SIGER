@@ -37,6 +37,7 @@ public class PaymentService : IPaymentService
     {
         var order = await _orderRepository.GetWithDetailsAsync(request.OrderId, cancellationToken);
         if (order is null) return Result<PaymentDto>.Failure("Order not found.");
+        if (order.Status == OrderStatus.PreOrdered) return Result<PaymentDto>.Failure("A preorder is not operational.");
         if (order.Status == OrderStatus.Paid) return Result<PaymentDto>.Failure("The order is already paid.");
         if (order.Status == OrderStatus.Cancelled) return Result<PaymentDto>.Failure("A cancelled order cannot be paid.");
         if (request.Amount <= 0 || request.Amount != order.Total) return Result<PaymentDto>.Failure("Payment amount must match the order total.");

@@ -83,7 +83,7 @@ internal sealed class ServiceFixture
         Transaction<SIGER.Application.Base.Result<SIGER.Application.DTOs.Users.UserDto>>();
     }
 
-    private void Transaction<T>() => Work
+    internal void Transaction<T>() => Work
         .Setup(x => x.ExecuteInTransactionAsync(It.IsAny<Func<CancellationToken, Task<T>>>(), It.IsAny<CancellationToken>()))
         .Returns(async (Func<CancellationToken, Task<T>> operation, CancellationToken token) =>
         {
@@ -100,7 +100,7 @@ internal sealed class ServiceFixture
     public OrderService OrderService => new(Orders.Object, Tables.Object, Products.Object, Users.Object, Work.Object);
     public KitchenService KitchenService => new(Orders.Object, Work.Object);
     public PaymentService PaymentService => new(Payments.Object, Orders.Object, Tables.Object, Users.Object, Work.Object);
-    public ReservationService ReservationService => new(Reservations.Object, Users.Object, Tables.Object, Work.Object);
+    public ReservationService ReservationService => new(Reservations.Object, Users.Object, Tables.Object, Work.Object, Orders.Object);
     public PromotionService PromotionService => new(Promotions.Object, Products.Object, Work.Object);
     public ReportService ReportService => new(Reports.Object);
     public AuditService AuditService => new(Audits.Object);

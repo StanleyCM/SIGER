@@ -12,7 +12,7 @@ public class OrderConfiguration : IEntityTypeConfiguration<Order>
         builder.HasKey(order => order.Id).HasName("pk_orden");
         builder.Property(order => order.Id).HasColumnName("id_orden").UseIdentityByDefaultColumn();
         builder.Property(order => order.TableId).HasColumnName("id_mesa");
-        builder.Property(order => order.UserId).HasColumnName("id_usuario").IsRequired();
+        builder.Property(order => order.UserId).HasColumnName("id_usuario").IsRequired(false);
         builder.Property(order => order.ClientId).HasColumnName("id_cliente");
         builder.Property(order => order.OrderDateTime).HasColumnName("fecha_hora").HasColumnType("timestamp with time zone").IsRequired();
         builder.Property(order => order.Status).HasColumnName("estado").HasColumnType("estado_orden").IsRequired();
@@ -23,6 +23,11 @@ public class OrderConfiguration : IEntityTypeConfiguration<Order>
         builder.Property(order => order.AccountRequested).HasColumnName("cuenta_solicitada").IsRequired();
         builder.Property(order => order.UpdatedAt).HasColumnName("fecha_actualizacion").HasColumnType("timestamp with time zone").IsRequired();
         builder.Property(order => order.Version).HasColumnName("version").HasDefaultValue(1L).IsConcurrencyToken().IsRequired();
+
+        builder.Property(o => o.ReservationId).HasColumnName("id_reserva");
+        builder.HasOne(o => o.Reservation).WithOne(r => r.Order).HasForeignKey<Order>(o => o.ReservationId)
+            .OnDelete(DeleteBehavior.Restrict).HasConstraintName("fk_orden_reserva");
+        builder.HasIndex(o => o.ReservationId).IsUnique().HasFilter("id_reserva IS NOT NULL").HasDatabaseName("ux_orden_id_reserva");
 
         builder.HasIndex(order => order.OrderDateTime).HasDatabaseName("ix_orden_fecha_hora");
         builder.HasIndex(order => order.Status).HasDatabaseName("ix_orden_estado");

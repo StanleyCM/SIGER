@@ -27,7 +27,7 @@ internal static class BusinessAudit
         [typeof(Category)] = ["Id", "IsActive", "CreatedAt", "UpdatedAt"],
         [typeof(Product)] = ["Id", "CategoryId", "Price", "IsAvailable", "Version", "CreatedAt", "UpdatedAt"],
         [typeof(Table)] = ["Id", "Number", "Capacity", "Status", "Version", "CreatedAt", "UpdatedAt"],
-        [typeof(Order)] = ["Id", "TableId", "UserId", "ClientId", "Status", "Origin", "Type", "Total", "AccountRequested", "Version", "OrderDateTime", "UpdatedAt"],
+        [typeof(Order)] = ["Id", "ReservationId", "TableId", "UserId", "ClientId", "Status", "Origin", "Type", "Total", "AccountRequested", "Version", "OrderDateTime", "UpdatedAt"],
         [typeof(OrderDetail)] = ["Id", "OrderId", "ProductId", "Quantity", "UnitPrice", "Subtotal"],
         [typeof(Payment)] = ["Id", "OrderId", "UserId", "Amount", "Method", "Status", "PaymentDate", "UpdatedAt"],
         [typeof(Reservation)] = ["Id", "UserId", "TableId", "ReservationDateTime", "NumberOfPeople", "Status", "CreatedAt", "UpdatedAt"],

@@ -5,7 +5,10 @@ namespace SIGER.Application.DTOs.Reservations;
 public sealed class ReservationDto
 {
     public long Id { get; set; }
-    public long UserId { get; set; }
+    public long? UserId { get; set; }
+    public string? ContactName { get; set; }
+    public string? ContactPhone { get; set; }
+    public string? ContactEmail { get; set; }
     public long TableId { get; set; }
     public int? TableNumber { get; set; }
     public DateTimeOffset ReservationDateTime { get; set; }
