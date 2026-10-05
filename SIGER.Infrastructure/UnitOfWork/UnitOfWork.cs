@@ -1,5 +1,6 @@
 using SIGER.Application.Interfaces.Persistence;
 using SIGER.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore.Storage;
 
 namespace SIGER.Infrastructure.UnitOfWork;
 
@@ -21,14 +22,16 @@ public sealed class UnitOfWork(SIGERDbContext context) : IUnitOfWork
         }
 
         await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
+        var commitStarted = false;
         try
         {
             await operation(cancellationToken);
+            commitStarted = true;
             await transaction.CommitAsync(cancellationToken);
         }
         catch
         {
-            await transaction.RollbackAsync(CancellationToken.None);
+            await RollbackAsync(transaction, commitStarted);
             throw;
         }
     }
@@ -45,16 +48,26 @@ public sealed class UnitOfWork(SIGERDbContext context) : IUnitOfWork
         }
 
         await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
+        var commitStarted = false;
         try
         {
             var result = await operation(cancellationToken);
+            commitStarted = true;
             await transaction.CommitAsync(cancellationToken);
             return result;
         }
         catch
         {
-            await transaction.RollbackAsync(CancellationToken.None);
+            await RollbackAsync(transaction, commitStarted);
             throw;
         }
+    }
+
+    private static async Task RollbackAsync(IDbContextTransaction transaction, bool commitStarted)
+    {
+        try { await transaction.RollbackAsync(CancellationToken.None); }
+        // A rejected PostgreSQL COMMIT may already have ended and reverted the transaction.
+        // Preserve that original error instead of replacing it with "transaction completed".
+        catch (InvalidOperationException) when (commitStarted) { }
     }
 }

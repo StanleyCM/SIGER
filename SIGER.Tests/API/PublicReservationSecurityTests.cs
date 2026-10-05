@@ -12,6 +12,75 @@ namespace SIGER.Tests.API;
 
 public class PublicReservationSecurityTests
 {
+    [Fact]
+    public async Task Availability_is_public_read_only_uncached_and_returns_only_times_and_booleans()
+    {
+        var g = new GuestFixture(); using var f = RealGuestApi(g); using var c = f.Client();
+        var day = DateTimeOffset.UtcNow.AddDays(2).ToString("yyyy-MM-dd");
+        var response = await c.GetAsync($"/api/v1/public/reservations/availability?date={day}&numberOfPeople=2");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode); Assert.True(response.Headers.CacheControl!.NoStore);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        Assert.Equal(13, json.RootElement.GetArrayLength());
+        foreach (var slot in json.RootElement.EnumerateArray())
+            Assert.Equal(new[] { "time", "available" }, slot.EnumerateObject().Select(p => p.Name));
+        g.F.NoSave();
+        Assert.Equal(HttpStatusCode.Unauthorized, (await c.GetAsync($"/api/v1/public/reservations/availability?date={day}&numberOfPeople=2&reservationId=10")).StatusCode);
+    }
+
+    [Theory]
+    [InlineData("numberOfPeople=2")] [InlineData("date=invalid&numberOfPeople=2")]
+    [InlineData("date=2020-01-01&numberOfPeople=2")] [InlineData("date=2099-01-01&numberOfPeople=2")]
+    [InlineData("date=2026-10-10&numberOfPeople=0")] [InlineData("date=2026-10-10&numberOfPeople=101")]
+    public async Task Availability_rejects_invalid_queries(string query)
+    {
+        using var f = RealGuestApi(new GuestFixture()); using var c = f.Client();
+        Assert.Equal(HttpStatusCode.BadRequest, (await c.GetAsync("/api/v1/public/reservations/availability?" + query)).StatusCode);
+    }
+
+    [Fact]
+    public async Task Patch_is_partial_requires_own_token_and_returns_no_secrets()
+    {
+        var g = new GuestFixture(); using var f = RealGuestApi(g); using var c = f.Client();
+        c.DefaultRequestHeaders.Add("X-Reservation-Token", g.Credential);
+        var response = await c.PatchAsJsonAsync("/api/v1/public/reservations/10", new { notes = "Edited", email = (string?)null });
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var json = await response.Content.ReadAsStringAsync();
+        Assert.Contains("Edited", json); Assert.Contains("Ana", json);
+        Assert.DoesNotContain("token", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(g.Credential, json); Assert.DoesNotContain("tableId", json); Assert.True(response.Headers.CacheControl!.NoStore);
+    }
+
+    [Theory]
+    [InlineData("missing")] [InlineData("wrong")] [InlineData("other")] [InlineData("expired")]
+    public async Task Patch_rejects_missing_wrong_other_and_expired_credentials(string kind)
+    {
+        var g = new GuestFixture(); using var f = RealGuestApi(g); using var c = f.Client();
+        if (kind == "expired") g.Reservation.AccessTokenExpiresAt = DateTimeOffset.UtcNow.AddSeconds(-1);
+        if (kind != "missing") c.DefaultRequestHeaders.Add("X-Reservation-Token", kind == "wrong" ? g.Tokens.Generate() : g.Credential);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await c.PatchAsJsonAsync($"/api/v1/public/reservations/{(kind == "other" ? 11 : 10)}", new { notes = "edit" })).StatusCode);
+        g.F.NoSave();
+    }
+
+    [Theory]
+    [InlineData("Confirmed")] [InlineData("Cancelled")] [InlineData("Completed")]
+    public async Task Patch_nonpending_returns_conflict(string status)
+    {
+        var g = new GuestFixture(); g.Reservation.Status = Enum.Parse<SIGER.Domain.Enums.ReservationStatus>(status);
+        using var f = RealGuestApi(g); using var c = f.Client(); c.DefaultRequestHeaders.Add("X-Reservation-Token", g.Credential);
+        Assert.Equal(HttpStatusCode.Conflict, (await c.PatchAsJsonAsync("/api/v1/public/reservations/10", new { notes = "edit" })).StatusCode);
+        g.F.NoSave();
+    }
+
+    [Theory]
+    [InlineData("id")] [InlineData("userId")] [InlineData("tableId")] [InlineData("status")]
+    [InlineData("accessToken")] [InlineData("accessTokenHash")] [InlineData("createdAt")]
+    public async Task Patch_rejects_internal_fields(string field)
+    {
+        var g = new GuestFixture(); using var f = RealGuestApi(g); using var c = f.Client(); c.DefaultRequestHeaders.Add("X-Reservation-Token", g.Credential);
+        Assert.Equal(HttpStatusCode.BadRequest, (await c.PatchAsJsonAsync("/api/v1/public/reservations/10", new Dictionary<string, object> { [field] = "forbidden" })).StatusCode);
+        g.F.NoSave();
+    }
+
     private static ApiFactory RealGuestApi(GuestFixture guest) => new()
     {
         ConfigureBackend = services =>

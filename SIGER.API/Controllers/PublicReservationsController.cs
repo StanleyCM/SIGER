@@ -14,6 +14,12 @@ public sealed class PublicReservationsController(IGuestReservationService reserv
 {
     public const string CredentialHeader = "X-Reservation-Token";
 
+    [HttpGet("availability"), EnableRateLimiting("Public")]
+    [ProducesResponseType(typeof(IReadOnlyList<ReservationAvailabilityDto>), 200)]
+    public async Task<IActionResult> Availability([FromQuery] ReservationAvailabilityRequestDto request,
+        [FromHeader(Name = CredentialHeader)] string? credential, CancellationToken cancellationToken)
+        => (await reservations.GetAvailabilityAsync(request, credential, cancellationToken)).ToHttp(this);
+
     [HttpPost, EnableRateLimiting("PublicWrite"), RequestSizeLimit(16_384)]
     [ProducesResponseType(typeof(GuestReservationCreatedDto), 201)]
     public async Task<IActionResult> Create(CreateGuestReservationRequestDto request, CancellationToken cancellationToken)
@@ -23,6 +29,12 @@ public sealed class PublicReservationsController(IGuestReservationService reserv
     [ProducesResponseType(typeof(GuestReservationDto), 200)]
     public async Task<IActionResult> Get(long id, [FromHeader(Name = CredentialHeader)] string? credential, CancellationToken cancellationToken)
         => (await reservations.GetAsync(id, credential, cancellationToken)).ToHttp(this);
+
+    [HttpPatch("{id:long}"), EnableRateLimiting("PublicWrite"), RequestSizeLimit(16_384)]
+    [ProducesResponseType(typeof(GuestReservationDto), 200)]
+    public async Task<IActionResult> Update(long id, UpdateGuestReservationRequestDto request,
+        [FromHeader(Name = CredentialHeader)] string? credential, CancellationToken cancellationToken)
+        => (await reservations.UpdateAsync(id, credential, request, cancellationToken)).ToHttp(this);
 
     [HttpPost("{id:long}/preorder"), EnableRateLimiting("PublicWrite"), RequestSizeLimit(32_768)]
     [ProducesResponseType(typeof(PreOrderDto), 201)]

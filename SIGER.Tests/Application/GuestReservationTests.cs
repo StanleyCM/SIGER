@@ -19,7 +19,7 @@ internal sealed class GuestFixture
     public Reservation Reservation { get; }
     public Order? SavedOrder { get; private set; }
     public Reservation? SavedReservation { get; private set; }
-    public GuestReservationService Guests => new(F.Reservations.Object, F.Tables.Object, Tokens, F.Work.Object, TimeProvider.System);
+    public GuestReservationService Guests => new(F.Reservations.Object, F.Tables.Object, F.Orders.Object, Tokens, F.Work.Object, TimeProvider.System);
     public PreOrderService Preorders => new(F.Reservations.Object, F.Orders.Object, F.Products.Object, Tokens, F.Work.Object, TimeProvider.System);
     public CreateGuestReservationRequestDto Request => new() { Name = " Ana ", Phone = "+58 412 1234567", NumberOfPeople = 2, ReservationDateTime = DateTimeOffset.UtcNow.AddDays(1) };
     public CreatePreOrderRequestDto Items => new() { Items = [new() { ProductId = 3, Quantity = 2, Notes = " Sin sal " }] };
@@ -30,7 +30,7 @@ internal sealed class GuestFixture
         Reservation = new() { Id = 10, TableId = 4, Status = ReservationStatus.Pending, NumberOfPeople = 2,
             ContactName = "Ana", ContactPhone = "123", ReservationDateTime = DateTimeOffset.UtcNow.AddDays(1),
             AccessTokenHash = Tokens.Hash(Credential), AccessTokenExpiresAt = DateTimeOffset.UtcNow.AddDays(1).AddHours(2) };
-        F.Transaction<Result<GuestReservationCreatedDto>>(); F.Transaction<Result<PreOrderDto>>();
+        F.Transaction<Result<GuestReservationCreatedDto>>(); F.Transaction<Result<PreOrderDto>>(); F.Transaction<Result<GuestReservationDto>>();
         F.Tables.Setup(x => x.GetReservationCandidateIdsAsync(It.IsAny<int>(), It.IsAny<CancellationToken>())).ReturnsAsync([4L]);
         F.Reservations.Setup(x => x.AddAsync(It.IsAny<Reservation>(), It.IsAny<CancellationToken>()))
             .Callback((Reservation r, CancellationToken _) => { r.Id = 10; SavedReservation = r; }).Returns(Task.CompletedTask);
@@ -122,11 +122,13 @@ public class GuestReservationTests
     }
 
     [Fact]
-    public async Task Own_reservation_query_excludes_credentials_and_contacts()
+    public async Task Own_reservation_query_returns_editable_contact_but_excludes_credentials()
     {
         var f = new GuestFixture(); var response = await f.Guests.GetAsync(10, f.Credential);
         var json = JsonSerializer.Serialize(response.Value);
         Assert.True(response.IsSuccess); Assert.DoesNotContain("Token", json); Assert.DoesNotContain("Contact", json);
+        Assert.Equal(f.Reservation.ContactName, response.Value!.Name);
+        Assert.Equal(f.Reservation.ContactPhone, response.Value.Phone);
     }
 
     [Fact]

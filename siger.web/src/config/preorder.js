@@ -1,0 +1,2 @@
+export const MAX_PREORDER_PRODUCTS = 50
+export const MAX_PRODUCT_QUANTITY = 100
