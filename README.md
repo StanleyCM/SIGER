@@ -2,8 +2,7 @@
 
 **Sistema Integral de Gestión de Restaurante**  
 **Restaurante:** Superior Kitchen Essentials  
-**Estudiante:** Stanley Camacho Abreu  
-**Matrícula:** 2025-2271
+**Autor:** Stanley Camacho Abreu  
 
 SIGER es un sistema para apoyar la gestión de un restaurante mediante una aplicación Web para clientes, una aplicación Desktop para el personal y una API central conectada a PostgreSQL en Supabase.
 
