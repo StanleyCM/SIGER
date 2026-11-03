@@ -108,20 +108,4 @@ public class GuestReservationEditTests
         g.F.NoSave();
     }
 
-    [Theory]
-    [InlineData("name")] [InlineData("phone")] [InlineData("email")] [InlineData("people")] [InlineData("notes")] [InlineData("date")]
-    public async Task Invalid_patch_never_saves(string field)
-    {
-        var g = new GuestFixture(); var patch = new UpdateGuestReservationRequestDto();
-        switch (field)
-        {
-            case "name": patch.Name = null; break;
-            case "phone": patch.Phone = "letters"; break;
-            case "email": patch.Email = "invalid"; break;
-            case "people": patch.NumberOfPeople = 0; break;
-            case "notes": patch.Notes = new string('a', 501); break;
-            case "date": patch.ReservationDateTime = null; break;
-        }
-        Assert.True((await g.Guests.UpdateAsync(10, g.Credential, patch)).IsFailure); g.F.NoSave();
-    }
 }

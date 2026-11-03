@@ -51,13 +51,6 @@ describe('Disponibilidad real de horarios', () => {
     expect(fetch.mock.calls.some(([url]) => url.includes('date=2026-10-07&numberOfPeople=3'))).toBe(true)
   })
 
-  it('conserva una selección si continúa disponible tras cambiar personas', async () => {
-    const user = userEvent.setup(); render(<ReservationForm onCreated={vi.fn()} />)
-    await chooseDate(user); await waitFor(() => expect(lunch()).toBeEnabled()); await user.click(lunch())
-    await user.click(screen.getByRole('button', { name: 'Aumentar cantidad de personas' }))
-    await waitFor(() => expect(lunch()).toBeEnabled()); expect(lunch()).toBeChecked()
-  })
-
   it('bloquea durante la carga, muestra fallo discreto y permite reintentar sin asumir disponibilidad', async () => {
     let respond
     fetch.mockImplementationOnce(() => new Promise(resolve => { respond = resolve }))

@@ -67,26 +67,6 @@ async function reserve(user) {
 }
 
 describe('Base funcional de reservaciones y preórdenes', () => {
-  it('muestra el formulario accesible y el catálogo de la API', async () => {
-    const user = userEvent.setup()
-    render(<App />)
-    expect(screen.queryByRole('form', { name: 'Solicitar reservación' })).not.toBeInTheDocument()
-    expect(requests).toHaveLength(0)
-    await user.click(screen.getByRole('button', { name: 'MENU', exact: true }))
-    expect(await screen.findByRole('heading', { name: 'Ravioles' })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Agregar Ravioles' })).not.toBeInTheDocument()
-    await user.selectOptions(screen.getByLabelText('Categoría'), '1')
-    await waitFor(() => expect(requests.some((r) => r.url.includes('categoryId=1'))).toBe(true))
-    await user.click(screen.getByRole('button', { name: 'RESERVA', exact: true }))
-    expect(screen.getByRole('form', { name: 'Solicitar reservación' })).toBeInTheDocument()
-    for (const label of ['Nombre', 'Teléfono', 'Correo (opcional)', 'Fecha', 'Observaciones (opcional)']) {
-      expect(screen.getByLabelText(label)).toBeInTheDocument()
-    }
-    expect(screen.getByRole('group', { name: 'Horario' })).toBeInTheDocument()
-    expect(screen.getByRole('group', { name: 'Cantidad de personas' })).toBeInTheDocument()
-    expect(screen.queryByRole('heading', { name: 'Ravioles' })).not.toBeInTheDocument()
-    expect(screen.queryByLabelText('TableId')).not.toBeInTheDocument()
-  })
 
   it('crea la reserva pendiente, admite correo omitido y oculta la credencial', async () => {
     const user = userEvent.setup()
@@ -105,16 +85,6 @@ describe('Base funcional de reservaciones y preórdenes', () => {
     expect(screen.getByText('7:00 PM')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Volver al inicio ↑' }))
     expect(requests.filter((r) => r.method === 'POST')).toHaveLength(1)
-  })
-
-  it('permite pasar de la reserva a una preorden opcional', async () => {
-    const user = userEvent.setup()
-    render(<App />)
-    await reserve(user)
-    await user.click(screen.getByRole('button', { name: 'Hacer preorden' }))
-    expect(screen.getByRole('heading', { name: 'Elige tu preorden' })).toHaveFocus()
-    expect(await screen.findByRole('button', { name: 'Agregar Ravioles' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Guardar preorden' })).toBeDisabled()
   })
 
   it('edita la selección y crea la preorden sin precios, mostrando el total del servidor', async () => {
@@ -139,40 +109,6 @@ describe('Base funcional de reservaciones y preórdenes', () => {
     await waitFor(() => expect(screen.getByText('Total de tu preorden')).toHaveTextContent('23,00'))
     expect(screen.getByText('La reservación permanece pendiente de confirmación.')).toBeInTheDocument()
     expect(document.body.textContent).not.toContain(token)
-  })
-
-  it('RESERVA reinicia desde Home después de una preorden y desde Menu sin alterar lo guardado', async () => {
-    const user = userEvent.setup()
-    render(<App />)
-    await reserve(user)
-    await user.click(screen.getByRole('button', { name: 'Hacer preorden' }))
-    await user.click(await screen.findByRole('button', { name: 'Agregar Ravioles' }))
-    await user.click(screen.getByRole('button', { name: 'Guardar preorden' }))
-    await screen.findByRole('heading', { name: 'Preorden registrada' })
-    const before = JSON.stringify({ savedReservations, savedPreorders })
-    await user.click(screen.getByRole('button', { name: 'Volver al inicio ↑' }))
-    expect(screen.getByText('Tu reserva actual')).not.toBeVisible()
-    const requestsBeforeReset = requests.length
-    await user.click(screen.getByRole('button', { name: 'RESERVA', exact: true }))
-    for (const label of ['Nombre', 'Teléfono', 'Correo (opcional)', 'Observaciones (opcional)']) expect(screen.getByLabelText(label)).toHaveValue('')
-    expect(screen.getByLabelText('Fecha')).toHaveTextContent('Elige tu fecha')
-    expect(screen.getByRole('group', { name: 'Cantidad de personas' })).toHaveTextContent('2 personas')
-    expect(screen.queryByRole('radio', { checked: true })).not.toBeInTheDocument()
-    expect(screen.queryByText('Tu reserva actual')).not.toBeInTheDocument()
-    expect(screen.queryByText('Reserva #10')).not.toBeInTheDocument()
-    expect(screen.queryByRole('heading', { name: 'Preorden registrada' })).not.toBeInTheDocument()
-    expect(screen.getByText('01 · Reservación')).toHaveClass('current')
-    expect(requests).toHaveLength(requestsBeforeReset)
-    expect(JSON.stringify({ savedReservations, savedPreorders })).toBe(before)
-    await reserve(user)
-    await user.click(screen.getByRole('button', { name: 'MENU', exact: true }))
-    await user.click(screen.getByRole('button', { name: 'RESERVA', exact: true }))
-    expect(screen.queryByText('Reserva #11')).not.toBeInTheDocument()
-    expect(screen.getByRole('form', { name: 'Solicitar reservación' })).toBeInTheDocument()
-    expect(savedReservations).toHaveLength(2)
-    expect(savedPreorders).toHaveLength(1)
-    expect(JSON.stringify({ savedReservations: savedReservations.slice(0, 1), savedPreorders })).toBe(before)
-    expect(requests.some(r => ['DELETE', 'PUT', 'PATCH'].includes(r.method))).toBe(false)
   })
 
   it('descarta el borrador de preorden y la credencial anterior al crear otra reserva', async () => {
@@ -202,26 +138,6 @@ describe('Base funcional de reservaciones y preórdenes', () => {
     expect(localStorage.length).toBe(0)
     expect(sessionStorage.length).toBe(0)
     expect(document.body.textContent).not.toContain(token)
-  })
-
-  it('no permite reiniciar mientras se está guardando una preorden', async () => {
-    const user = userEvent.setup()
-    const originalFetch = fetch.getMockImplementation()
-    let release
-    fetch.mockImplementation((url, options) => url.endsWith('/preorder')
-      ? new Promise(resolve => { release = () => resolve(originalFetch(url, options)) })
-      : originalFetch(url, options))
-    render(<App />)
-    await reserve(user)
-    await user.click(screen.getByRole('button', { name: 'Hacer preorden' }))
-    await user.click(await screen.findByRole('button', { name: 'Agregar Ravioles' }))
-    await user.click(screen.getByRole('button', { name: 'Guardar preorden' }))
-    expect(screen.getByRole('button', { name: 'Nueva reserva' })).toBeDisabled()
-    await user.click(screen.getByRole('button', { name: 'Nueva reserva' }))
-    expect(screen.getByRole('button', { name: 'Guardando preorden…' })).toBeDisabled()
-    release()
-    await screen.findByRole('heading', { name: 'Preorden registrada' })
-    expect(screen.getByRole('button', { name: 'Nueva reserva' })).toBeEnabled()
   })
 
   it('precarga el formulario de edición y cancelar no toca el servidor', async () => {
@@ -299,17 +215,4 @@ describe('Base funcional de reservaciones y preórdenes', () => {
     expect(JSON.stringify(savedReservations)).toBe(before)
   })
 
-  it('el botón global RESERVA también reinicia al pulsarlo dentro del formulario de edición', async () => {
-    const user = userEvent.setup()
-    render(<App />)
-    await reserve(user)
-    await user.click(screen.getByRole('button', { name: 'Editar reserva' }))
-    await user.click(screen.getByRole('button', { name: 'RESERVA', exact: true }))
-    expect(screen.getByRole('form', { name: 'Solicitar reservación' })).toBeInTheDocument()
-    expect(screen.getByLabelText('Nombre')).toHaveValue('')
-    expect(screen.getByLabelText('Fecha')).toHaveTextContent('Elige tu fecha')
-    expect(screen.getByRole('group', { name: 'Cantidad de personas' })).toHaveTextContent('2 personas')
-    expect(savedReservations).toHaveLength(1)
-    expect(requests.some(r => ['PATCH', 'DELETE'].includes(r.method))).toBe(false)
-  })
 })

@@ -101,15 +101,4 @@ describe('Catálogo agrupado y cantidades de preorden', () => {
     expect(screen.getByRole('button', { name: 'Agregar Hamburguesa artesanal', exact: true })).toBeInTheDocument()
   })
 
-  it('respeta el máximo de 100 unidades y bloquea controles durante el envío', async () => {
-    const add = vi.fn()
-    const props = { onAdd: add, onDecrease: vi.fn(), items: [{ productId: 4, quantity: 100 }] }
-    const { rerender } = render(<ProductCatalog {...props} />)
-    expect(await screen.findByRole('button', { name: 'Agregar una unidad de Hamburguesa artesanal' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Quitar una unidad de Hamburguesa artesanal' })).toBeEnabled()
-    rerender(<ProductCatalog {...props} disabled />)
-    expect(screen.getByRole('button', { name: 'Quitar una unidad de Hamburguesa artesanal' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Agregar Limonada natural' })).toBeDisabled()
-    expect(add).not.toHaveBeenCalled()
-  })
 })

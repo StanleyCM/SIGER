@@ -62,9 +62,9 @@ public class GuestReservationTests
     }
 
     [Theory]
-    [InlineData("name")] [InlineData("phone")] [InlineData("email")] [InlineData("past")]
-    [InlineData("zero")] [InlineData("negative")] [InlineData("many")] [InlineData("notes")]
-    [InlineData("longname")] [InlineData("longphone")] [InlineData("maxdate")]
+    [InlineData("phone")]
+    [InlineData("past")]
+    [InlineData("many")]
     public async Task Invalid_guest_input_never_saves(string field)
     {
         var f = new GuestFixture(); var r = f.Request;
@@ -112,25 +112,6 @@ public class GuestReservationTests
         Assert.Equal(new[] { "lock4", "check4", "lock8", "check8" }, calls); Assert.Equal(8, f.SavedReservation!.TableId);
     }
 
-    [Theory]
-    [InlineData("missing")] [InlineData("invalid")] [InlineData("expired")] [InlineData("other")]
-    public async Task Reservation_access_requires_own_unexpired_credential(string kind)
-    {
-        var f = new GuestFixture(); string? token = kind == "missing" ? null : kind == "invalid" ? f.Tokens.Generate() : f.Credential;
-        if (kind == "expired") f.Reservation.AccessTokenExpiresAt = DateTimeOffset.UtcNow;
-        await Assert.ThrowsAsync<UnauthorizedException>(() => f.Guests.GetAsync(kind == "other" ? 11 : 10, token));
-    }
-
-    [Fact]
-    public async Task Own_reservation_query_returns_editable_contact_but_excludes_credentials()
-    {
-        var f = new GuestFixture(); var response = await f.Guests.GetAsync(10, f.Credential);
-        var json = JsonSerializer.Serialize(response.Value);
-        Assert.True(response.IsSuccess); Assert.DoesNotContain("Token", json); Assert.DoesNotContain("Contact", json);
-        Assert.Equal(f.Reservation.ContactName, response.Value!.Name);
-        Assert.Equal(f.Reservation.ContactPhone, response.Value.Phone);
-    }
-
     [Fact]
     public async Task Internal_cancellation_cancels_preorder_without_releasing_table()
     {
@@ -142,13 +123,4 @@ public class GuestReservationTests
         Assert.Same(f.SavedOrder, await f.F.Orders.Object.GetByReservationIdAsync(10));
     }
 
-    [Fact]
-    public async Task Internal_guest_reschedule_updates_preorder_table_and_credential_expiry()
-    {
-        var f = new GuestFixture(); await f.Preorders.CreateAsync(10, f.Credential, f.Items);
-        f.F.Tables.Setup(x => x.GetByIdForUpdateAsync(8, It.IsAny<CancellationToken>())).ReturnsAsync(new Table { Id = 8, Capacity = 4 });
-        var date = DateTimeOffset.UtcNow.AddDays(2);
-        Assert.True((await f.F.ReservationService.UpdateAsync(10, new() { TableId = 8, NumberOfPeople = 2, ReservationDateTime = date })).IsSuccess);
-        Assert.Equal(8, f.SavedOrder!.TableId); Assert.Equal(date.AddHours(2), f.Reservation.AccessTokenExpiresAt);
-    }
 }

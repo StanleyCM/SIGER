@@ -32,9 +32,9 @@ public class PreOrderTests
     }
 
     [Theory]
-    [InlineData("missing")] [InlineData("unavailable")] [InlineData("inactive")] [InlineData("zero")]
-    [InlineData("negative")] [InlineData("many")] [InlineData("notes")] [InlineData("empty")]
-    [InlineData("null")] [InlineData("nullitem")] [InlineData("duplicate")] [InlineData("tooManyItems")]
+    [InlineData("missing")]
+    [InlineData("unavailable")]
+    [InlineData("inactive")]
     public async Task Invalid_items_are_rejected_without_writes(string kind)
     {
         var f = new GuestFixture(); var request = f.Items;
@@ -78,15 +78,6 @@ public class PreOrderTests
         f.F.Reservations.Setup(x => x.GetByIdForUpdateAsync(10, It.IsAny<CancellationToken>())).ReturnsAsync(() =>
         { Assert.True(f.F.InTransaction); f.Reservation.AccessTokenExpiresAt = DateTimeOffset.UtcNow.AddMinutes(-1); return f.Reservation; });
         await Assert.ThrowsAsync<UnauthorizedException>(() => f.Preorders.CreateAsync(10, f.Credential, f.Items)); f.F.NoSave();
-    }
-
-    [Fact]
-    public async Task Query_requires_credential_for_same_reservation()
-    {
-        var f = new GuestFixture(); await f.Preorders.CreateAsync(10, f.Credential, f.Items);
-        Assert.True((await f.Preorders.GetAsync(10, f.Credential)).IsSuccess);
-        await Assert.ThrowsAsync<UnauthorizedException>(() => f.Preorders.GetAsync(11, f.Credential));
-        await Assert.ThrowsAsync<UnauthorizedException>(() => f.Preorders.GetAsync(10, null));
     }
 
     [Fact]

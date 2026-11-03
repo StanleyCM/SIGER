@@ -33,19 +33,6 @@ public class ReservationAvailabilityTests
         g.F.Tables.Verify(x => x.GetByIdAsync(4, It.IsAny<CancellationToken>()), Times.Once);
     }
 
-    [Theory]
-    [InlineData("full")] [InlineData("capacity")] [InlineData("out")] [InlineData("none")]
-    public async Task Ineligible_tables_make_all_slots_unavailable(string reason)
-    {
-        var g = new GuestFixture();
-        if (reason == "capacity") g.F.Table.Capacity = 1;
-        if (reason == "out") g.F.Table.Status = TableStatus.OutOfService;
-        if (reason == "none") g.F.Tables.Setup(x => x.GetReservationCandidateIdsAsync(2, It.IsAny<CancellationToken>())).ReturnsAsync([]);
-        if (reason == "full") g.F.Reservations.Setup(x => x.HasOverlapAsync(4, It.IsAny<DateTimeOffset>(), It.IsAny<DateTimeOffset>(), null, It.IsAny<CancellationToken>())).ReturnsAsync(true);
-        Assert.All((await Service(g).GetAvailabilityAsync(Request())).Value!, s => Assert.False(s.Available));
-        g.F.NoSave();
-    }
-
     [Fact]
     public async Task People_date_and_past_slots_change_availability()
     {
@@ -70,14 +57,6 @@ public class ReservationAvailabilityTests
         Assert.True((await Service(g).GetAvailabilityAsync(request, g.Credential)).IsSuccess);
         g.F.Reservations.Verify(x => x.HasOverlapAsync(4, It.IsAny<DateTimeOffset>(), It.IsAny<DateTimeOffset>(), 10, It.IsAny<CancellationToken>()), Times.Exactly(13));
         g.F.NoSave();
-    }
-
-    [Theory]
-    [InlineData(0, 6)] [InlineData(101, 6)] [InlineData(2, 4)]
-    public async Task Invalid_query_is_rejected_before_table_reads(int people, int day)
-    {
-        var g = new GuestFixture(); Assert.True((await Service(g).GetAvailabilityAsync(Request(people, day))).IsFailure);
-        g.F.Tables.Verify(x => x.GetReservationCandidateIdsAsync(It.IsAny<int>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]

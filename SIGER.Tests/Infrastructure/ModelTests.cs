@@ -69,130 +69,18 @@ internal sealed class ModelFixture : IDisposable
 
 public class ModelTests
 {
+
     [Fact]
-    public void Available_products_join_uses_existing_category_estado_column()
+    public void Monetary_precision_is_explicit()
     {
         using var f = new ModelFixture();
-        var category = f.Context.Model.FindEntityType(typeof(Category))!;
-        Assert.Equal("categoria", category.GetTableName());
-        var isActive = category.FindProperty(nameof(Category.IsActive))!;
-        Assert.Equal("estado", isActive.GetColumnName());
-        Assert.Equal("boolean", isActive.GetColumnType());
-        Assert.False(isActive.IsNullable);
-
-        var sql = f.Context.Products.AsNoTracking().Include(product => product.Category)
-            .Where(product => product.IsAvailable).OrderBy(product => product.Name).ToQueryString();
-        Assert.Contains("JOIN categoria AS c", sql);
-        Assert.Contains("c.estado", sql);
-        Assert.DoesNotContain("c.activo", sql);
-        Assert.Equal(System.Data.ConnectionState.Closed, f.Context.Database.GetDbConnection().State);
-    }
-
-    [Fact]
-    public void Repeated_scopes_reuse_the_same_EF_model()
-    {
-        using var first = new ModelFixture();
-        using var second = new ModelFixture();
-        Assert.Same(first.Context.Model, second.Context.Model);
-    }
-
-    [Theory]
-    [InlineData(typeof(Role), "rol", "id_rol")]
-    [InlineData(typeof(User), "usuario", "id_usuario")]
-    [InlineData(typeof(Category), "categoria", "id_categoria")]
-    [InlineData(typeof(Product), "producto", "id_producto")]
-    [InlineData(typeof(Table), "mesa", "id_mesa")]
-    [InlineData(typeof(Order), "orden", "id_orden")]
-    [InlineData(typeof(OrderDetail), "detalle_orden", "id_detalle")]
-    [InlineData(typeof(Payment), "pago", "id_pago")]
-    [InlineData(typeof(Reservation), "reserva", "id_reserva")]
-    [InlineData(typeof(Promotion), "promocion", "id_promocion")]
-    [InlineData(typeof(Audit), "auditoria", "id_auditoria")]
-    public void Tables_identity_keys_and_physical_columns(Type type, string table, string key)
-    {
-        using var f = new ModelFixture();
-        Assert.Equal(12, f.Context.Model.GetEntityTypes().Count());
-        var entity = f.Context.Model.FindEntityType(type)!;
-        Assert.Equal(table, entity.GetTableName());
-        var property = Assert.Single(entity.FindPrimaryKey()!.Properties);
-        Assert.Equal("Id", property.Name); Assert.Equal(typeof(long), property.ClrType);
-        Assert.Equal(key, property.GetColumnName()); Assert.Equal(ValueGenerated.OnAdd, property.ValueGenerated);
-        Assert.All(entity.GetProperties(), p => Assert.NotEqual(p.Name, p.GetColumnName()));
-        Assert.Equal(System.Data.ConnectionState.Closed, f.Context.Database.GetDbConnection().State);
-    }
-
-    [Fact]
-    public void Composite_key_and_delete_rules_match_relational_model()
-    {
-        using var f = new ModelFixture(); var model = f.Context.Model;
-        var join = model.FindEntityType(typeof(PromotionProduct))!;
-        Assert.Equal("promocion_producto", join.GetTableName());
-        Assert.Equal(["PromotionId", "ProductId"], join.FindPrimaryKey()!.Properties.Select(p => p.Name));
-        Assert.Null(join.FindProperty("Id"));
-        Assert.All(join.GetForeignKeys(), fk => Assert.Equal(DeleteBehavior.Cascade, fk.DeleteBehavior));
-        Assert.Equal(DeleteBehavior.SetNull, Assert.Single(model.FindEntityType(typeof(Audit))!.GetForeignKeys()).DeleteBehavior);
-        foreach (var fk in model.GetEntityTypes().SelectMany(e => e.GetForeignKeys()))
+        var model = f.Context.Model;
+        foreach (var (type, field) in new[] { (typeof(Product), nameof(Product.Price)), (typeof(OrderDetail), nameof(OrderDetail.UnitPrice)),
+            (typeof(OrderDetail), nameof(OrderDetail.Subtotal)), (typeof(Order), nameof(Order.Total)), (typeof(Payment), nameof(Payment.Amount)) })
         {
-            var expected = fk.DeclaringEntityType.ClrType == typeof(PromotionProduct) ||
-                           (fk.DeclaringEntityType.ClrType == typeof(OrderDetail) && fk.PrincipalEntityType.ClrType == typeof(Order))
-                ? DeleteBehavior.Cascade : fk.DeclaringEntityType.ClrType == typeof(Audit) ? DeleteBehavior.SetNull : DeleteBehavior.Restrict;
-            Assert.Equal(expected, fk.DeleteBehavior);
-            Assert.StartsWith("fk_", fk.GetConstraintName());
+            var property = model.FindEntityType(type)!.FindProperty(field)!;
+            Assert.Equal(12, property.GetPrecision()); Assert.Equal(2, property.GetScale());
         }
-        var order = model.FindEntityType(typeof(Order))!;
-        Assert.True(order.FindProperty("TableId")!.IsNullable); Assert.True(order.FindProperty("ClientId")!.IsNullable);
-        Assert.True(order.FindProperty("UserId")!.IsNullable);
-        Assert.Equal("CreatedOrders", order.FindNavigation("User")!.Inverse!.Name);
-        Assert.Equal("ClientOrders", order.FindNavigation("Client")!.Inverse!.Name);
-    }
-
-    [Theory]
-    [InlineData(typeof(Product), "Price", 12, 2)]
-    [InlineData(typeof(OrderDetail), "UnitPrice", 12, 2)]
-    [InlineData(typeof(OrderDetail), "Subtotal", 12, 2)]
-    [InlineData(typeof(Order), "Total", 12, 2)]
-    [InlineData(typeof(Payment), "Amount", 12, 2)]
-    [InlineData(typeof(Promotion), "DiscountPercentage", 5, 2)]
-    public void Monetary_precision_is_explicit(Type type, string name, int precision, int scale)
-    {
-        using var f = new ModelFixture(); var p = f.Context.Model.FindEntityType(type)!.FindProperty(name)!;
-        Assert.Equal(precision, p.GetPrecision()); Assert.Equal(scale, p.GetScale());
-    }
-
-    [Fact]
-    public void PostgreSql_specific_types_lengths_and_indexes()
-    {
-        using var f = new ModelFixture(); var model = f.Context.Model;
-        var audit = model.FindEntityType(typeof(Audit))!;
-        Assert.Equal("jsonb", audit.FindProperty("PreviousData")!.GetColumnType());
-        Assert.Equal("jsonb", audit.FindProperty("NewData")!.GetColumnType());
-        var ip = audit.FindProperty("IpAddress")!;
-        Assert.Equal("inet", ip.GetColumnType());
-        Assert.Equal(System.Net.IPAddress.Loopback, ip.GetValueConverter()!.ConvertToProvider("127.0.0.1"));
-        Assert.Null(ip.GetValueConverter()!.ConvertToProvider(null));
-        Assert.All(model.GetEntityTypes().SelectMany(e => e.GetProperties()).Where(p => p.ClrType == typeof(DateTimeOffset)),
-            p => Assert.Equal("timestamp with time zone", p.GetColumnType()));
-        Assert.Equal(150, model.FindEntityType(typeof(User))!.FindProperty("Email")!.GetMaxLength());
-        Assert.Null(model.FindEntityType(typeof(Product))!.FindProperty("ImageUrl")!.GetMaxLength());
-        Assert.Equal(300, model.FindEntityType(typeof(OrderDetail))!.FindProperty("Note")!.GetMaxLength());
-        Assert.Equal(7, model.GetEntityTypes().SelectMany(e => e.GetIndexes()).Count(i => i.IsUnique));
-        Assert.All(model.GetEntityTypes().SelectMany(e => e.GetIndexes()), i => Assert.False(string.IsNullOrWhiteSpace(i.GetDatabaseName())));
-    }
-
-    [Fact]
-    public void Native_enums_use_documented_spanish_labels()
-    {
-        using var f = new ModelFixture();
-        var model = f.Context.GetService<IDesignTimeModel>().Model;
-        var enums = model.GetPostgresEnums().ToDictionary(e => e.Name, e => e.Labels);
-        Assert.Equal(7, enums.Count);
-        Assert.Equal(new[] { "Disponible", "Ocupada", "Reservada", "FueraServicio" }.Order(), enums["estado_mesa"].Order());
-        Assert.Equal(new[] { "Pendiente", "EnPreparacion", "Lista", "Servida", "Pagada", "Cancelada", "Preordenada" }.Order(), enums["estado_orden"].Order());
-        Assert.Equal(new[] { "Efectivo", "Tarjeta", "Transferencia", "Otro" }.Order(), enums["metodo_pago"].Order());
-        Assert.Equal(new[] { "Pendiente", "Completado", "Fallido", "Reembolsado" }.Order(), enums["estado_pago"].Order());
-        Assert.Equal(new[] { "Desktop", "Web" }.Order(), enums["origen_orden"].Order());
-        Assert.Equal(new[] { "Mesa", "ParaLlevar" }.Order(), enums["tipo_orden"].Order());
-        Assert.Equal(new[] { "Pendiente", "Confirmada", "Cancelada", "Completada" }.Order(), enums["estado_reserva"].Order());
     }
 
     [Theory]

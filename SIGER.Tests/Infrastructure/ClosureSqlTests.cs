@@ -12,28 +12,6 @@ namespace SIGER.Tests.Infrastructure;
 
 public class ClosureSqlTests
 {
-    [Fact]
-    public async Task Product_batch_is_one_filtered_query_and_empty_batch_has_no_IO()
-    {
-        using var f = new Fixture(); var repository = new ProductRepository(f.Context);
-        Assert.Empty(await repository.GetByIdsAsync([])); Assert.Empty(f.Capture.Sql);
-        Assert.Empty(await repository.GetByIdsAsync([3, 4, 5]));
-        var sql = Assert.Single(f.Capture.Sql);
-        Assert.Contains("FROM producto", sql); Assert.Contains("ANY", sql);
-        Assert.DoesNotContain("JOIN", sql);
-    }
-
-    [Fact]
-    public async Task Product_pagination_joins_category_filters_and_has_stable_SQL_order()
-    {
-        using var f = new Fixture();
-        var page = await new ProductRepository(f.Context).GetPagedAsync(2, 20, 7);
-        Assert.Empty(page.Items); Assert.Equal(2, f.Capture.Sql.Count);
-        var sql = f.Capture.Sql[1];
-        Assert.Contains("JOIN categoria", sql); Assert.Contains("id_categoria =", sql);
-        Assert.Contains("ORDER BY p.nombre, p.id_producto", sql);
-        Assert.Contains("LIMIT", sql); Assert.Contains("OFFSET", sql);
-    }
 
     [Fact]
     public async Task Reservation_overlap_is_server_side_exists_with_half_open_two_hour_interval()

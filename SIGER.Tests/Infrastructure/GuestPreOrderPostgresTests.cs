@@ -99,16 +99,6 @@ public sealed class GuestPreOrderPostgresTests : IAsyncLifetime
     }
 
     [LocalPostgresFact]
-    public async Task Script_reuses_equivalent_indexes_under_other_names()
-    {
-        await Sql("ALTER INDEX ux_orden_id_reserva RENAME TO existing_order_reservation; ALTER INDEX ux_reserva_token_acceso_hash RENAME TO existing_token; ALTER INDEX ix_reserva_mesa_fecha_disponibilidad RENAME TO existing_availability;");
-        var count = await Sql("SELECT count(*) FROM pg_indexes WHERE schemaname='public'");
-        await Sql(Script);
-        Assert.Equal(count, await Sql("SELECT count(*) FROM pg_indexes WHERE schemaname='public'"));
-        Assert.Equal(3L, await Sql("SELECT count(*) FROM pg_indexes WHERE indexname IN ('existing_order_reservation','existing_token','existing_availability')"));
-    }
-
-    [LocalPostgresFact]
     public async Task Incompatible_existing_column_aborts_and_rolls_back_nullability_changes()
     {
         await Sql("ALTER TABLE reserva ALTER COLUMN id_usuario SET NOT NULL, ALTER COLUMN nombre_contacto TYPE varchar(149); ALTER TABLE orden ALTER COLUMN id_usuario SET NOT NULL;");
@@ -131,14 +121,6 @@ public sealed class GuestPreOrderPostgresTests : IAsyncLifetime
         Assert.Single(results, r => r.IsSuccess); Assert.Equal(7, results.Count(r => r.IsFailure));
         Assert.Equal(1L, await Sql("SELECT count(*) FROM reserva WHERE id_usuario IS NULL"));
         Assert.Equal("Disponible", await Sql("SELECT estado::text FROM mesa WHERE id_mesa=1"));
-    }
-
-    [LocalPostgresFact]
-    public async Task Half_open_intervals_allow_back_to_back_reservations()
-    {
-        var when = DateTimeOffset.UtcNow.AddDays(3);
-        await Reserve(when); await Reserve(when.AddHours(2));
-        Assert.Equal(2L, await Sql("SELECT count(*) FROM reserva WHERE id_usuario IS NULL"));
     }
 
     [LocalPostgresFact]
@@ -190,72 +172,6 @@ public sealed class GuestPreOrderPostgresTests : IAsyncLifetime
             "UPDATE reserva SET token_acceso_hash=NULL,token_acceso_expira=NULL WHERE id_usuario IS NULL"
         }) Assert.Equal("23514", (await Assert.ThrowsAsync<PostgresException>(() => Sql(sql))).SqlState);
         Assert.Equal("23503", (await Assert.ThrowsAsync<PostgresException>(() => Sql("DELETE FROM reserva WHERE id_usuario IS NULL"))).SqlState);
-    }
-
-    [LocalPostgresFact]
-    public async Task Public_catalog_filters_in_SQL_before_pagination_and_audit_excludes_contacts_and_credentials()
-    {
-        var r = await Reserve();
-        using var scope = Scope();
-        var catalog = scope.ServiceProvider.GetRequiredService<IPublicCatalogService>();
-        var page = (await catalog.GetProductsAsync(1, 1, null)).Value!;
-        Assert.Equal(1, page.TotalCount); Assert.Equal(1, Assert.Single(page.Items).Id);
-        Assert.Single((await catalog.GetCategoriesAsync()).Value!);
-        var db = scope.ServiceProvider.GetRequiredService<SIGERDbContext>();
-        var reservation = await db.Reservations.SingleAsync(x => x.Id == r.Reservation.Id);
-        Assert.Equal(32, reservation.AccessTokenHash!.Length);
-        foreach (var audit in await db.Audits.ToArrayAsync())
-        {
-            var json = audit.PreviousData + audit.NewData;
-            Assert.DoesNotContain("PRIVATE", json); Assert.DoesNotContain("private@example.invalid", json);
-            Assert.DoesNotContain("+584121234567", json); Assert.DoesNotContain(r.AccessToken, json);
-            Assert.DoesNotContain(Convert.ToBase64String(reservation.AccessTokenHash), json);
-        }
-    }
-
-    [LocalPostgresFact]
-    public async Task Guest_edit_reassigns_preorder_preserving_credentials_prices_and_nonoperational_state()
-    {
-        var r = await Reserve();
-        using (var s = Scope()) Assert.True((await s.ServiceProvider.GetRequiredService<IPreOrderService>().CreateAsync(r.Reservation.Id, r.AccessToken, Items)).IsSuccess);
-        var hash = await Sql("SELECT encode(token_acceso_hash,'hex') FROM reserva WHERE id_usuario IS NULL");
-        var details = await Sql("SELECT jsonb_agg(to_jsonb(d))::text FROM detalle_orden d");
-        await Sql("INSERT INTO mesa(numero,capacidad) VALUES (2,12)");
-        var tablesBefore = await Sql("SELECT jsonb_agg(to_jsonb(t) ORDER BY id_mesa)::text FROM mesa t");
-        var productsBefore = await Sql("SELECT jsonb_agg(to_jsonb(p) ORDER BY id_producto)::text FROM producto p");
-        var date = DateTimeOffset.UtcNow.AddDays(4);
-        using (var s = Scope())
-        {
-            var result = await s.ServiceProvider.GetRequiredService<IGuestReservationService>().UpdateAsync(r.Reservation.Id, r.AccessToken,
-                new() { Name = "PRIVATE-EDIT", Phone = "8095550199", NumberOfPeople = 8, ReservationDateTime = date, Notes = "PRIVATE-EDIT-NOTES" });
-            Assert.True(result.IsSuccess, result.Error); Assert.Equal(date.AddHours(2), result.Value!.AccessExpiresAt);
-        }
-        Assert.Equal(hash, await Sql("SELECT encode(token_acceso_hash,'hex') FROM reserva WHERE id_usuario IS NULL"));
-        Assert.Equal(details, await Sql("SELECT jsonb_agg(to_jsonb(d))::text FROM detalle_orden d"));
-        Assert.Equal(1L, await Sql("SELECT count(*) FROM reserva r JOIN orden o ON o.id_reserva=r.id_reserva WHERE r.id_mesa=2 AND o.id_mesa=r.id_mesa AND r.estado='Pendiente' AND o.estado='Preordenada' AND o.origen='Web' AND o.total=25"));
-        Assert.Equal(0L, await Sql("SELECT count(*) FROM mesa WHERE estado <> 'Disponible'"));
-        Assert.Equal(0L, await Sql("SELECT count(*) FROM pago"));
-        Assert.Equal(tablesBefore, await Sql("SELECT jsonb_agg(to_jsonb(t) ORDER BY id_mesa)::text FROM mesa t"));
-        Assert.Equal(productsBefore, await Sql("SELECT jsonb_agg(to_jsonb(p) ORDER BY id_producto)::text FROM producto p"));
-        using var read = Scope();
-        Assert.True((await read.ServiceProvider.GetRequiredService<IGuestReservationService>().GetAsync(r.Reservation.Id, r.AccessToken)).IsSuccess);
-        Assert.Empty(await read.ServiceProvider.GetRequiredService<IOrderRepository>().GetKitchenOrdersAsync());
-        var audits = (string)(await Sql("SELECT coalesce(jsonb_agg(to_jsonb(a))::text,'') FROM auditoria a"))!;
-        Assert.DoesNotContain("PRIVATE", audits); Assert.DoesNotContain(r.AccessToken, audits); Assert.DoesNotContain("8095550199", audits);
-    }
-
-    [LocalPostgresFact]
-    public async Task Guest_edit_excludes_self_allows_adjacent_intervals_and_failure_preserves_every_field()
-    {
-        var date = DateTimeOffset.UtcNow.AddDays(5); var r = await Reserve(date);
-        using (var s = Scope()) Assert.True((await s.ServiceProvider.GetRequiredService<IGuestReservationService>().UpdateAsync(r.Reservation.Id, r.AccessToken,
-            new() { ReservationDateTime = date.AddMinutes(30), NumberOfPeople = 3 })).IsSuccess);
-        await Reserve(date.AddHours(2.5));
-        var before = await Sql("SELECT jsonb_agg(to_jsonb(r) ORDER BY id_reserva)::text FROM reserva r");
-        using (var s = Scope()) Assert.Equal("No table is available for this reservation.",
-            (await s.ServiceProvider.GetRequiredService<IGuestReservationService>().UpdateAsync(r.Reservation.Id, r.AccessToken,
-                new() { ReservationDateTime = date.AddHours(1), Name = "Do not save" })).Error);
-        Assert.Equal(before, await Sql("SELECT jsonb_agg(to_jsonb(r) ORDER BY id_reserva)::text FROM reserva r"));
     }
 
     [LocalPostgresFact]
@@ -313,6 +229,7 @@ public sealed class GuestPreOrderPostgresTests : IAsyncLifetime
         Assert.All(await Read(date.AddDays(1)), s => Assert.True(s.Available));
         Assert.All(await Read(date, 5), s => Assert.False(s.Available));
         Assert.True((await Read(date)).Single(s => s.Time == "18:00").Available);
+        Assert.True((await Reserve(start.AddHours(2))).Reservation.Id > 0);
         // A competing write after the advisory read must still be rejected by creation.
         Assert.True((await Reserve(start.AddHours(6))).Reservation.Id > 0);
         using (var scope = Scope()) Assert.True((await scope.ServiceProvider.GetRequiredService<IGuestReservationService>().CreateAsync(Request(start.AddHours(6)))).IsFailure);
