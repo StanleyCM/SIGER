@@ -11,10 +11,28 @@ export default function App() {
   const [view, setView] = useState('home')
   const [reservationSession, setReservationSession] = useState(0)
   const [visited, setVisited] = useState({ menu: false, reservation: false })
+  const [hasReservation, setHasReservation] = useState(false)
+  const [writing, setWriting] = useState(false)
+  const writeLock = useRef(false)
   const main = useRef(null)
 
+  async function runWrite(operation) {
+    if (writeLock.current) return
+    writeLock.current = true
+    setWriting(true)
+    try { await operation() }
+    finally {
+      writeLock.current = false
+      setWriting(false)
+    }
+  }
+
   function navigate(next) {
-    if (next === 'reservation') setReservationSession((session) => session + 1)
+    if (writeLock.current) return
+    if (next === 'reservation') {
+      setHasReservation(false)
+      setReservationSession((session) => session + 1)
+    }
     setVisited((previous) => ({ ...previous, [next]: true }))
     setView(next)
   }
@@ -22,7 +40,7 @@ export default function App() {
   useEffect(() => {
     // Moving focus to the new view also brings its beginning into view.
     main.current?.focus()
-  }, [view])
+  }, [view, reservationSession])
 
   return (
     <>
@@ -34,11 +52,14 @@ export default function App() {
             {visited.menu && <><button className="back-home text-button" onClick={() => navigate('home')}>← Volver al inicio</button><MenuSection /></>}
           </div>
           <div id="reservation-view" className="page-shell internal-view" hidden={view !== 'reservation'}>
-            {visited.reservation && <><button className="back-home text-button" onClick={() => navigate('home')}>← Volver al inicio</button><ReservationFlow key={reservationSession} onHome={() => navigate('home')} /></>}
+            {visited.reservation && <><button className="back-home text-button" disabled={writing} onClick={() => navigate('home')}>← Volver al inicio</button>
+              <ReservationFlow key={reservationSession} runWrite={runWrite} writing={writing}
+                onActiveChange={setHasReservation} onHome={() => navigate('home')} /></>}
           </div>
         </main>
-        <SiteFooter onHome={() => navigate('home')} />
-        <SiteHeader view={view} onNavigate={navigate} />
+        <SiteFooter disabled={writing} onHome={() => navigate('home')} />
+        <SiteHeader view={view} onNavigate={navigate} disabled={writing}
+          onResume={hasReservation ? () => setView('reservation') : undefined} />
       </div>
     </>
   )

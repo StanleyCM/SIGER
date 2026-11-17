@@ -4,20 +4,36 @@ import ReservationSummary from './ReservationSummary'
 import PreOrderBuilder from './PreOrderBuilder'
 import PreOrderConfirmation from './PreOrderConfirmation'
 import { restaurantImages } from '../restaurantImages'
-import { updateReservation } from '../api/reservationsApi'
+import { getPreOrder, getReservation, updateReservation } from '../api/reservationsApi'
 
-export default function ReservationFlow({ onHome }) {
+export default function ReservationFlow({ onHome, runWrite, writing, onActiveChange }) {
   const [step, setStep] = useState('reservation')
   const [reservation, setReservation] = useState(null)
   const [credential, setCredential] = useState(null)
   const [preorder, setPreorder] = useState(null)
   const [preorderBusy, setPreorderBusy] = useState(false)
-  const [editing, setEditing] = useState(false)
+  const [editing, setEditing] = useState(null)
   const [updated, setUpdated] = useState(false)
+  const [checking, setChecking] = useState(false)
+  const [refreshMessage, setRefreshMessage] = useState('')
+  const [refreshError, setRefreshError] = useState('')
+  const [preorderUncertain, setPreorderUncertain] = useState(false)
+  const [now, setNow] = useState(() => Date.now())
+  const refreshRequest = useRef(null)
   const preorderSummary = useRef(null)
   const panel = useRef(null)
   const resetFocus = useRef(false)
   const heading = useRef(null)
+  const reservationId = reservation?.id
+  const isFuture = reservation && Date.parse(reservation.reservationDateTime) > now
+  const canEdit = isFuture && reservation.status === 'Pending'
+  const canPreOrder = isFuture && ['Pending', 'Confirmed'].includes(reservation.status)
+  useEffect(() => () => refreshRequest.current?.abort(), [])
+  useEffect(() => {
+    if (!reservationId) return
+    const timer = setInterval(() => setNow(Date.now()), 60_000)
+    return () => clearInterval(timer)
+  }, [reservationId])
   useEffect(() => {
     if (editing) panel.current?.querySelector('input[name="name"]')?.focus()
     else if (step !== 'reservation') heading.current?.focus()
@@ -28,8 +44,10 @@ export default function ReservationFlow({ onHome }) {
   }, [step, editing])
 
   function created(result) {
+    setNow(Date.now())
     setReservation(result.reservation)
     setCredential({ token: result.accessToken, expiresAt: result.accessTokenExpiresAt })
+    onActiveChange(true)
     setStep('choice')
   }
   function finish() { setStep('done') }
@@ -39,10 +57,55 @@ export default function ReservationFlow({ onHome }) {
     setReservation(null)
     setPreorder(null)
     setPreorderBusy(false)
-    setEditing(false)
+    setEditing(null)
     setUpdated(false)
+    setPreorderUncertain(false)
+    setRefreshError('')
+    setRefreshMessage('')
+    onActiveChange(false)
     resetFocus.current = true
     setStep('reservation')
+  }
+
+  function applyReservation(current) {
+    setNow(Date.now())
+    setReservation(current)
+    setCredential((previous) => ({ ...previous, expiresAt: current.accessExpiresAt ?? previous.expiresAt }))
+  }
+
+  async function checkEdit() {
+    const current = await getReservation(reservation.id, credential.token)
+    applyReservation(current)
+    return current
+  }
+
+  async function refresh() {
+    if (refreshRequest.current || writing) return
+    const controller = new AbortController()
+    refreshRequest.current = controller
+    setChecking(true)
+    setRefreshMessage('')
+    setRefreshError('')
+    const [current, order] = await Promise.allSettled([
+      getReservation(reservation.id, credential.token, controller.signal),
+      getPreOrder(reservation.id, credential.token, controller.signal),
+    ])
+    refreshRequest.current = null
+    if (controller.signal.aborted) return
+    const errors = new Set()
+    if (current.status === 'fulfilled') applyReservation(current.value)
+    else errors.add(current.reason.message)
+    if (order.status === 'fulfilled') {
+      setPreorder(order.value)
+      setPreorderUncertain(false)
+      setStep('done')
+    } else if (order.reason.status === 404 && !preorder && current.status === 'fulfilled') {
+      if (preorderUncertain) setRefreshMessage('No hay una preorden registrada en este momento. Conservamos tu selección.')
+      setPreorderUncertain(false)
+    } else errors.add(order.reason.message)
+    if (errors.size) setRefreshError([...errors].join(' '))
+    else if (!preorderUncertain || order.status === 'fulfilled') setRefreshMessage('Estado consultado.')
+    setChecking(false)
   }
 
   return (
@@ -55,16 +118,16 @@ export default function ReservationFlow({ onHome }) {
       <ol className="steps" aria-label="Pasos de tu visita"><li className={step === 'reservation' ? 'current' : ''}>01 · Reservación</li>
         <li className={step === 'preorder' ? 'current' : ''}>02 · Preorden opcional</li></ol>
       <div className="flow-panel" ref={panel}>
-        {editing && <ReservationForm initialReservation={reservation} availabilityToken={credential.token} onCancel={() => setEditing(false)}
+        {editing && <ReservationForm initialReservation={editing} availabilityToken={credential.token} onCancel={() => setEditing(null)}
+          runWrite={runWrite} blocked={!canEdit} onCheckWrite={checkEdit}
           onSubmitReservation={(body) => updateReservation(reservation.id, credential.token, body)}
           onCreated={(result) => {
-            setReservation(result)
-            setCredential((current) => ({ ...current, expiresAt: result.accessExpiresAt }))
+            applyReservation(result)
             setUpdated(true)
-            setEditing(false)
+            setEditing(null)
           }} />}
         <div hidden={editing}>
-        {step === 'reservation' ? <ReservationForm onCreated={created} /> : (
+        {step === 'reservation' ? <ReservationForm onCreated={created} runWrite={runWrite} /> : (
           <div className="reservation-confirmation">
             <header className="confirmation-header">
               <p className="eyebrow">Tu reserva actual</p>
@@ -72,23 +135,30 @@ export default function ReservationFlow({ onHome }) {
             </header>
             <ReservationSummary reservation={reservation} />
             <div className="confirmation-edit">
-              {reservation.status === 'Pending' && credential && <button className="button button-small button-outline" type="button" disabled={preorderBusy} onClick={() => setEditing(true)}>Editar reserva</button>}
+              {credential && <button className="text-button" type="button" disabled={writing || checking}
+                onClick={refresh}>{checking ? 'Consultando estado…' : 'Consultar estado'}</button>}
+              {canEdit && credential && <button className="button button-small button-outline" type="button" disabled={writing || checking}
+                onClick={() => setEditing(reservation)}>Editar reserva</button>}
               {preorder && <button className="text-button" type="button" onClick={() => preorderSummary.current?.focus()}>Ver preorden</button>}
             </div>
-            {!preorder && step !== 'preorder' && credential && <div className="choice-panel"><h4>¿Deseas realizar una preorden?</h4>
+            {refreshError && <p className="error-message" role="alert">{refreshError}</p>}
+            {refreshMessage && <p className="field-hint" role="status">{refreshMessage}</p>}
+            {!preorder && step !== 'preorder' && credential && canPreOrder && <div className="choice-panel"><h4>¿Deseas realizar una preorden?</h4>
               <p>Elige tus platos con anticipación para tu próxima visita.</p>
-              <button className="button confirmation-primary" type="button" onClick={() => setStep('preorder')}>Hacer preorden</button>
+              <button className="button confirmation-primary" type="button" disabled={checking} onClick={() => setStep('preorder')}>Hacer preorden</button>
             </div>}
             {step === 'preorder' && <PreOrderBuilder reservationId={reservation.id} token={credential.token} expiresAt={credential.expiresAt}
               busy={preorderBusy} setBusy={setPreorderBusy}
-              onCreated={(result) => { setPreorder(result); setPreorderBusy(false); setStep('done') }} onFinish={finish} />}
-            {step === 'done' && preorder && <div className="completion" role="status" tabIndex="-1" ref={preorderSummary}><PreOrderConfirmation preorder={preorder} />
-              <p className="field-hint">Guarda el número de tu reserva para identificar tu solicitud.</p>
+              runWrite={runWrite} blocked={checking || preorderUncertain || !canPreOrder}
+              onUncertain={(message) => { setPreorderUncertain(true); setRefreshMessage(''); setRefreshError(message) }}
+              onCreated={(result) => { setPreorder(result); setRefreshMessage(''); setRefreshError(''); setStep('done') }} onFinish={finish} />}
+            {step === 'done' && preorder && <div className="completion" role="status" tabIndex="-1" ref={preorderSummary}><PreOrderConfirmation preorder={preorder} reservationStatus={reservation.status} />
               </div>}
+            <p className="field-hint">Si recargas o cierras la página, perderás el acceso desde esta sesión. Guarda el número para identificar tu solicitud con el restaurante.</p>
             <div className="confirmation-footer">
-              <button className="button button-small button-outline confirmation-new" type="button" disabled={preorderBusy}
+              <button className="button button-small button-outline confirmation-new" type="button" disabled={writing || checking}
                 onClick={newReservation}>Nueva reserva</button>
-              <button className="text-button" type="button" onClick={onHome}>Volver al inicio ↑</button>
+              <button className="text-button" type="button" disabled={writing} onClick={onHome}>Volver al inicio ↑</button>
             </div>
           </div>
         )}

@@ -190,6 +190,8 @@ input::placeholder, textarea::placeholder { color: var(--muted); opacity: 1; }
 .floating-nav button + button { background: var(--warm-brown); color: var(--button-ink); }
 .floating-nav button:hover, .floating-nav button[aria-pressed='true'] { color: var(--dark-brown); background: var(--light-green); }
 .floating-nav button:focus-visible { outline: 2px solid var(--cream); outline-offset: 2px; }
+.floating-nav:has(button:nth-child(3)) { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.floating-nav button:disabled { opacity: .65; cursor: wait; }
 .site-footer { padding: 48px 6vw calc(130px + env(safe-area-inset-bottom)); display: flex; align-items: center; justify-content: space-between; gap: 28px; background: var(--dark-brown); color: var(--cream); }
 .site-footer .wordmark { background: none; border: 0; padding: 12px 0; color: inherit; text-align: left; }
 .site-footer :focus-visible { outline-color: var(--cream); }

@@ -10,6 +10,7 @@ using SIGER.Application.Services;
 using SIGER.Domain.Enums;
 using SIGER.Infrastructure.DependencyInjection;
 using SIGER.Infrastructure.Persistence;
+using SIGER.Tests.Application;
 
 namespace SIGER.Tests.Infrastructure;
 
@@ -74,8 +75,8 @@ public sealed class GuestPreOrderPostgresTests : IAsyncLifetime
     private IServiceScope Scope() => provider!.CreateScope();
     private static CreateGuestReservationRequestDto Request(DateTimeOffset? date = null) => new()
     {
-        Name = "PRIVATE-NAME", Phone = "+584121234567", Email = "private@example.invalid", Notes = "PRIVATE-NOTES",
-        NumberOfPeople = 2, ReservationDateTime = date ?? DateTimeOffset.UtcNow.AddDays(1)
+        Name = "PRIVATE-NAME", Phone = "584121234567", Email = "private@example.invalid", Notes = "PRIVATE-NOTES",
+        NumberOfPeople = 2, ReservationDateTime = date ?? GuestFixture.NoonInSantoDomingo(1)
     };
     private async Task<GuestReservationCreatedDto> Reserve(DateTimeOffset? date = null)
     {
@@ -110,7 +111,7 @@ public sealed class GuestPreOrderPostgresTests : IAsyncLifetime
     [LocalPostgresFact]
     public async Task Concurrent_guests_competing_for_one_table_create_only_one_reservation()
     {
-        var when = DateTimeOffset.UtcNow.AddDays(2);
+        var when = GuestFixture.NoonInSantoDomingo(2);
         var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var tasks = Enumerable.Range(0, 8).Select(async _ =>
         {
@@ -191,7 +192,7 @@ public sealed class GuestPreOrderPostgresTests : IAsyncLifetime
     [LocalPostgresFact]
     public async Task Concurrent_edits_competing_for_one_slot_have_one_winner()
     {
-        var date = DateTimeOffset.UtcNow.AddDays(6);
+        var date = GuestFixture.NoonInSantoDomingo(6);
         var first = await Reserve(date); var second = await Reserve(date.AddHours(2));
         var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var tasks = new[] { first, second }.Select(async r =>

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import ReservationForm from '../components/ReservationForm'
 import { availableSlots } from './availabilityFixture'
@@ -14,10 +14,12 @@ beforeEach(() => {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.unstubAllEnvs() })
 
 async function completeSchedule(user) {
-  await user.type(screen.getByLabelText('Nombre'), 'Ana Pérez')
+  fireEvent.change(screen.getByLabelText('Nombre'), { target: { value: 'Ana Pérez' } })
   await user.click(screen.getByLabelText('Fecha'))
   await user.click(screen.getByRole('button', { name: /lunes, 5 de octubre de 2026/i }))
-  await user.click(screen.getByRole('radio', { name: '12:00 PM', exact: true }))
+  const slot = screen.getByRole('radio', { name: '12:00 PM', exact: true })
+  await waitFor(() => expect(slot).toBeEnabled())
+  await user.click(slot)
 }
 
 describe('Contacto y cantidad de personas', () => {
@@ -32,10 +34,10 @@ describe('Contacto y cantidad de personas', () => {
     expect(phone).toHaveAttribute('aria-invalid', 'true')
     await user.click(screen.getByRole('button', { name: 'Solicitar reserva' }))
     expect(fetch.mock.calls.filter(([, options]) => options.method === 'POST')).toHaveLength(0)
-    await user.type(phone, '123456789')
+    fireEvent.change(phone, { target: { value: '123456789' } })
     await user.click(screen.getByRole('button', { name: 'Solicitar reserva' }))
     expect(fetch.mock.calls.filter(([, options]) => options.method === 'POST')).toHaveLength(0)
-    await user.type(phone, '0123456')
+    fireEvent.change(phone, { target: { value: '1234567890123456' } })
     expect(phone).toHaveValue('123456789012345')
     expect(phone).toHaveAttribute('aria-invalid', 'false')
   })

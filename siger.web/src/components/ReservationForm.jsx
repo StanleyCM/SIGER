@@ -4,31 +4,41 @@ import { reservationDateRange, reservationDateTime, reservationFormSchedule, res
 import { emailError, partySizeLimits, phoneError, sanitizePhone } from '../utils/reservationValidation'
 import ReservationDatePicker from './ReservationDatePicker'
 
-export default function ReservationForm({ onCreated, initialReservation, availabilityToken, onCancel, onSubmitReservation = createReservation }) {
+export default function ReservationForm({ onCreated, initialReservation, availabilityToken, onCancel, onCheckWrite,
+  blocked, runWrite = (operation) => operation(), onSubmitReservation = createReservation }) {
   const editing = Boolean(initialReservation)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [uncertainDraft, setUncertainDraft] = useState(null)
+  const [checking, setChecking] = useState(false)
   const [date, setDate] = useState(() => reservationFormSchedule(initialReservation?.reservationDateTime).date)
   const [slot, setSlot] = useState(() => reservationFormSchedule(initialReservation?.reservationDateTime).slot)
   const [phone, setPhone] = useState(initialReservation?.phone ?? '')
   const [phoneTouched, setPhoneTouched] = useState(false)
   const [email, setEmail] = useState(initialReservation?.email ?? '')
   const [people, setPeople] = useState(initialReservation?.numberOfPeople ?? 2)
-  const phoneMessage = phoneError(phone)
+  const phoneMessage = editing && phone === initialReservation.phone ? '' : phoneError(phone)
   const emailMessage = emailError(email)
   const [now, setNow] = useState(() => new Date())
   const range = reservationDateRange(now)
   const [availability, setAvailability] = useState(null)
   const [attempt, setAttempt] = useState(0)
   const reservationId = initialReservation?.id
+  const original = reservationFormSchedule(initialReservation?.reservationDateTime)
+  const originalDate = original.date
+  const originalSlot = original.slot
+  const originalPeople = initialReservation?.numberOfPeople
+  const scheduleChanged = !editing || date !== originalDate || slot !== originalSlot || people !== originalPeople
+  const canCheckAvailability = Boolean(date) && date >= range.min && date <= range.max
+    && people >= partySizeLimits.min && people <= partySizeLimits.max
   const availabilityKey = `${date}:${people}:${reservationId ?? ''}:${attempt}`
-  const loadingAvailability = Boolean(date) && availability?.key !== availabilityKey
+  const loadingAvailability = canCheckAvailability && availability?.key !== availabilityKey
   const availabilityError = availability?.key === availabilityKey ? availability.error : ''
   const isAvailable = (time) => !loadingAvailability && !availabilityError
     && availability?.slots?.some((item) => item.time === time && item.available === true)
 
   useEffect(() => {
-    if (!date) return
+    if (!canCheckAvailability) return
     const controller = new AbortController()
     getReservationAvailability(date, people, { reservationId, token: availabilityToken, signal: controller.signal })
       .then((slots) => {
@@ -37,15 +47,16 @@ export default function ReservationForm({ onCreated, initialReservation, availab
           throw new Error('No pudimos consultar los horarios. Inténtalo de nuevo.')
         }
         setAvailability({ key: availabilityKey, slots })
-        setSlot((current) => slots.some((item) => item.time === current && item.available) ? current : '')
+        setSlot((current) => (date === originalDate && people === originalPeople && current === originalSlot)
+          || slots.some((item) => item.time === current && item.available) ? current : '')
       })
       .catch((failure) => {
         if (controller.signal.aborted) return
         setAvailability({ key: availabilityKey, error: failure.message })
-        setSlot('')
+        setSlot((current) => date === originalDate && people === originalPeople && current === originalSlot ? current : '')
       })
     return () => controller.abort()
-  }, [date, people, reservationId, availabilityToken, availabilityKey])
+  }, [date, people, reservationId, availabilityToken, availabilityKey, canCheckAvailability, originalDate, originalSlot, originalPeople])
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 60_000)
     return () => clearInterval(timer)
@@ -53,12 +64,17 @@ export default function ReservationForm({ onCreated, initialReservation, availab
 
   async function submit(event) {
     event.preventDefault()
-    if (busy) return
+    if (busy || blocked || uncertainDraft) return
     const fields = new FormData(event.currentTarget)
     const name = fields.get('name').trim()
-    const scheduleError = validateReservationSchedule(date, slot)
-    if (scheduleError) { setError(scheduleError); return }
-    if (!isAvailable(slot)) { setError('Consulta la disponibilidad y elige un horario disponible.'); return }
+    if (scheduleChanged) {
+      const scheduleError = validateReservationSchedule(date, slot)
+      if (scheduleError) { setError(scheduleError); return }
+      if (!isAvailable(slot)) { setError('Consulta la disponibilidad y elige un horario disponible.'); return }
+      if (!Number.isInteger(people) || people < partySizeLimits.min || people > partySizeLimits.max) {
+        setError('Selecciona la cantidad de personas.'); return
+      }
+    }
     if (!name) { setError('Escribe tu nombre.'); return }
     if (phoneMessage || emailMessage) {
       setPhoneTouched(true)
@@ -66,33 +82,52 @@ export default function ReservationForm({ onCreated, initialReservation, availab
       event.currentTarget.elements.namedItem(phoneMessage ? 'phone' : 'email').focus()
       return
     }
-    if (!Number.isInteger(people) || people < partySizeLimits.min || people > partySizeLimits.max) {
-      setError('Selecciona la cantidad de personas.'); return
-    }
-    const invalid = Array.from(event.currentTarget.elements).find((field) => field.willValidate && !field.validity.valid)
+    const invalid = Array.from(event.currentTarget.elements).find((field) => field.willValidate && !field.validity.valid
+      && (scheduleChanged || field.name !== 'time'))
     if (invalid) { setError(`Revisa el campo «${invalid.labels?.[0]?.textContent || invalid.name}».`); invalid.focus(); return }
-    setBusy(true)
-    setError('')
-    try {
-      const created = await onSubmitReservation({
-        name, phone, email: email.trim() || null,
-        reservationDateTime: reservationDateTime(date, slot), numberOfPeople: people,
-        notes: fields.get('notes').trim() || null,
-      })
-      onCreated(created)
-    } catch (failure) {
-      setError(failure.message)
-      setBusy(false)
-      if (failure.status === 409) setAttempt((current) => current + 1)
+    const contact = { name, phone, email: email.trim() || null, notes: fields.get('notes').trim() || null }
+    const body = editing
+      ? Object.fromEntries(Object.entries(contact).filter(([key, value]) => value !== (initialReservation[key] ?? null)))
+      : contact
+    if (scheduleChanged) {
+      body.reservationDateTime = reservationDateTime(date, slot)
+      body.numberOfPeople = people
     }
+    if (editing && Object.keys(body).length === 0) { setError('No hay cambios que guardar.'); return }
+    await runWrite(async () => {
+      setBusy(true)
+      setError('')
+      try { onCreated(await onSubmitReservation(body)) }
+      catch (failure) {
+        setError(failure.message)
+        if (failure.uncertain) setUncertainDraft(body)
+        if (failure.status === 409) setAttempt((current) => current + 1)
+      } finally { setBusy(false) }
+    })
+  }
+
+  async function checkWrite() {
+    if (checking) return
+    setChecking(true)
+    try {
+      const current = await onCheckWrite()
+      const saved = Object.entries(uncertainDraft).every(([key, value]) => key === 'reservationDateTime'
+        ? Date.parse(current[key]) === Date.parse(value) : (current[key] ?? null) === value)
+      if (saved) onCreated(current)
+      else {
+        setUncertainDraft(null)
+        setError('Los datos del servidor no coinciden con tu borrador. Conservamos lo que escribiste.')
+      }
+    } catch (failure) { setError(failure.message) }
+    finally { setChecking(false) }
   }
 
   return (
-    <form onSubmit={submit} noValidate className="reservation-form" aria-label={editing ? 'Editar reservación' : 'Solicitar reservación'} aria-busy={busy}>
+    <form onSubmit={submit} noValidate className="reservation-form" aria-label={editing ? 'Editar reservación' : 'Solicitar reservación'} aria-busy={busy || checking}>
       <h3 className="form-title">{editing ? 'Editar tu reserva' : 'Tu próxima visita'}</h3>
       <p className="form-intro">Elige tu momento y déjanos tus datos.</p>
       <p className="field-hint">Todos los campos son obligatorios excepto los marcados como opcionales.</p>
-      <fieldset disabled={busy}>
+      <fieldset disabled={busy || checking || Boolean(uncertainDraft) || blocked}>
         <legend className="sr-only">Datos de tu reserva</legend>
         <div className="form-grid">
           <label>Nombre<input name="name" defaultValue={initialReservation?.name ?? ''} autoComplete="name" required maxLength={150} placeholder="Tu nombre y apellido" /></label>
@@ -146,8 +181,11 @@ export default function ReservationForm({ onCreated, initialReservation, availab
         </div>
       </fieldset>
       {error && <p className="error-message" role="alert">{error}</p>}
-      <div className="form-submit"><button className="button" type="submit" disabled={busy || loadingAvailability || Boolean(availabilityError)}>{busy ? 'Enviando solicitud…' : editing ? 'Guardar cambios' : 'Solicitar reserva'}</button>
-        {editing && <button className="text-button" type="button" disabled={busy} onClick={onCancel}>Cancelar edición</button>}
+      <div className="form-submit"><button className="button" type="submit" disabled={busy || blocked || Boolean(uncertainDraft) || (scheduleChanged && (loadingAvailability || Boolean(availabilityError)))}>{busy ? 'Guardando reserva…' : editing ? 'Guardar cambios' : 'Solicitar reserva'}</button>
+        {uncertainDraft && onCheckWrite && <button className="text-button" type="button" disabled={checking} onClick={checkWrite}>
+          {checking ? 'Consultando…' : 'Consultar cambios guardados'}</button>}
+        {editing && <button className="text-button" type="button" disabled={busy || checking || Boolean(uncertainDraft)}
+          onClick={onCancel}>Cancelar edición</button>}
         <span className="field-hint">Sujeta a disponibilidad y confirmación.</span></div>
     </form>
   )

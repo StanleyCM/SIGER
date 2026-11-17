@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using System.Text.Json.Serialization;
+using SIGER.Application.Services;
 
 namespace SIGER.Application.DTOs.Reservations;
 
@@ -11,10 +12,10 @@ public sealed class UpdateGuestReservationRequestDto : IValidatableObject
     private DateTimeOffset? date;
     private int? people;
     [StringLength(150)] public string? Name { get => name; set { name = value; HasName = true; } }
-    [RegularExpression(@"^[0-9]{10,15}$")] public string? Phone { get => phone; set { phone = value; HasPhone = true; } }
-    [EmailAddress, StringLength(150)] public string? Email { get => email; set { email = value; HasEmail = true; } }
+    [RegularExpression(GuestReservationSchedule.PhonePattern)] public string? Phone { get => phone; set { phone = value; HasPhone = true; } }
+    [RegularExpression(GuestReservationSchedule.EmailPattern), StringLength(150)] public string? Email { get => email; set { email = value; HasEmail = true; } }
     public DateTimeOffset? ReservationDateTime { get => date; set { date = value; HasDate = true; } }
-    [Range(1, 100)] public int? NumberOfPeople { get => people; set { people = value; HasPeople = true; } }
+    [Range(1, GuestReservationSchedule.MaxPeople)] public int? NumberOfPeople { get => people; set { people = value; HasPeople = true; } }
     [StringLength(500)] public string? Notes { get => notes; set { notes = value; HasNotes = true; } }
     [JsonIgnore] public bool HasName { get; private set; }
     [JsonIgnore] public bool HasPhone { get; private set; }

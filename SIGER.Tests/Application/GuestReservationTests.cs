@@ -21,15 +21,22 @@ internal sealed class GuestFixture
     public Reservation? SavedReservation { get; private set; }
     public GuestReservationService Guests => new(F.Reservations.Object, F.Tables.Object, F.Orders.Object, Tokens, F.Work.Object, TimeProvider.System);
     public PreOrderService Preorders => new(F.Reservations.Object, F.Orders.Object, F.Products.Object, Tokens, F.Work.Object, TimeProvider.System);
-    public CreateGuestReservationRequestDto Request => new() { Name = " Ana ", Phone = "+58 412 1234567", NumberOfPeople = 2, ReservationDateTime = DateTimeOffset.UtcNow.AddDays(1) };
+    public CreateGuestReservationRequestDto Request => new() { Name = " Ana ", Phone = "584121234567", NumberOfPeople = 2, ReservationDateTime = NoonInSantoDomingo(1) };
     public CreatePreOrderRequestDto Items => new() { Items = [new() { ProductId = 3, Quantity = 2, Notes = " Sin sal " }] };
+
+    internal static DateTimeOffset NoonInSantoDomingo(int days)
+    {
+        var offset = TimeSpan.FromHours(-4);
+        var date = DateTimeOffset.UtcNow.ToOffset(offset).Date.AddDays(days);
+        return new DateTimeOffset(date.AddHours(12), offset).ToUniversalTime();
+    }
 
     public GuestFixture()
     {
         Credential = Tokens.Generate();
         Reservation = new() { Id = 10, TableId = 4, Status = ReservationStatus.Pending, NumberOfPeople = 2,
-            ContactName = "Ana", ContactPhone = "123", ReservationDateTime = DateTimeOffset.UtcNow.AddDays(1),
-            AccessTokenHash = Tokens.Hash(Credential), AccessTokenExpiresAt = DateTimeOffset.UtcNow.AddDays(1).AddHours(2) };
+            ContactName = "Ana", ContactPhone = "584121234567", ReservationDateTime = Request.ReservationDateTime,
+            AccessTokenHash = Tokens.Hash(Credential), AccessTokenExpiresAt = Request.ReservationDateTime.AddHours(2) };
         F.Transaction<Result<GuestReservationCreatedDto>>(); F.Transaction<Result<PreOrderDto>>(); F.Transaction<Result<GuestReservationDto>>();
         F.Tables.Setup(x => x.GetReservationCandidateIdsAsync(It.IsAny<int>(), It.IsAny<CancellationToken>())).ReturnsAsync([4L]);
         F.Reservations.Setup(x => x.AddAsync(It.IsAny<Reservation>(), It.IsAny<CancellationToken>()))

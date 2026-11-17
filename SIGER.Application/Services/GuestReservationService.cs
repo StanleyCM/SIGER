@@ -13,22 +13,24 @@ namespace SIGER.Application.Services;
 public sealed class GuestReservationService(IReservationRepository reservations, ITableRepository tables, IOrderRepository orders,
     IGuestReservationTokenService tokens, IUnitOfWork work, TimeProvider clock) : IGuestReservationService
 {
+    private const string InvalidSchedule = "Select a future restaurant time slot within the next 30 days.";
+
     public Task<Result<GuestReservationCreatedDto>> CreateAsync(CreateGuestReservationRequestDto request, CancellationToken cancellationToken = default)
         => work.ExecuteInTransactionAsync(async ct =>
         {
             var now = clock.GetUtcNow();
             if (!Validator.TryValidateObject(request, new ValidationContext(request), [], true))
                 return Result<GuestReservationCreatedDto>.Failure("Invalid guest contact, party size or notes.");
-            if (request.ReservationDateTime <= now || request.ReservationDateTime > DateTimeOffset.MaxValue.AddHours(-2))
-                return Result<GuestReservationCreatedDto>.Failure("Reservation date must be in the future and within the supported range.");
+            if (!GuestReservationSchedule.IsBookableStart(request.ReservationDateTime, now))
+                return Result<GuestReservationCreatedDto>.Failure(InvalidSchedule);
 
             // All reservation writers lock the table before checking overlap. Use a stable lock order.
             var table = await FindAvailableTableAsync(request.ReservationDateTime, request.NumberOfPeople, null, tables.GetByIdForUpdateAsync, ct);
             if (table is not null)
             {
                 now = clock.GetUtcNow();
-                if (request.ReservationDateTime <= now)
-                    return Result<GuestReservationCreatedDto>.Failure("Reservation date must be in the future and within the supported range.");
+                if (!GuestReservationSchedule.IsBookableStart(request.ReservationDateTime, now))
+                    return Result<GuestReservationCreatedDto>.Failure(InvalidSchedule);
                 var credential = tokens.Generate();
                 var reservation = new Reservation
                 {
@@ -36,7 +38,7 @@ public sealed class GuestReservationService(IReservationRepository reservations,
                     ContactName = request.Name.Trim(), ContactPhone = request.Phone.Trim(), ContactEmail = Normalize(request.Email),
                     ReservationDateTime = request.ReservationDateTime.ToUniversalTime(), NumberOfPeople = request.NumberOfPeople,
                     Notes = Normalize(request.Notes), CreatedAt = now, UpdatedAt = now,
-                    AccessTokenHash = tokens.Hash(credential), AccessTokenExpiresAt = request.ReservationDateTime.ToUniversalTime().AddHours(2)
+                    AccessTokenHash = tokens.Hash(credential), AccessTokenExpiresAt = request.ReservationDateTime.ToUniversalTime().AddHours(GuestReservationSchedule.DurationHours)
                 };
                 await reservations.AddAsync(reservation, ct);
                 await work.SaveChangesAsync(ct);
@@ -51,9 +53,8 @@ public sealed class GuestReservationService(IReservationRepository reservations,
     public async Task<Result<IReadOnlyList<ReservationAvailabilityDto>>> GetAvailabilityAsync(
         ReservationAvailabilityRequestDto request, string? credential = null, CancellationToken cancellationToken = default)
     {
-        var today = GuestReservationSchedule.Today(clock.GetUtcNow());
         if (!Validator.TryValidateObject(request, new ValidationContext(request), [], true)
-            || request.Date is not { } date || date < today || date > today.AddDays(GuestReservationSchedule.MaxAdvanceDays))
+            || request.Date is not { } date || !GuestReservationSchedule.IsBookableDate(date, clock.GetUtcNow()))
             return Result<IReadOnlyList<ReservationAvailabilityDto>>.Failure("Select a date within the next 30 days and a valid party size.");
         if (request.ReservationId is { } id)
             RequireCredential(await reservations.GetByIdAsync(id, cancellationToken), credential, tokens, clock.GetUtcNow());
@@ -70,9 +71,10 @@ public sealed class GuestReservationService(IReservationRepository reservations,
         foreach (var time in GuestReservationSchedule.Slots)
         {
             var start = GuestReservationSchedule.Start(date, time);
-            var available = start > clock.GetUtcNow()
+            var available = GuestReservationSchedule.IsBookableStart(start, clock.GetUtcNow())
                 && await FindAvailableTableAsync(start, request.NumberOfPeople, request.ReservationId, ReadTable, cancellationToken, candidates) is not null;
-            result.Add(new(time.ToString("HH:mm", System.Globalization.CultureInfo.InvariantCulture), available && start > clock.GetUtcNow()));
+            result.Add(new(time.ToString("HH:mm", System.Globalization.CultureInfo.InvariantCulture),
+                available && GuestReservationSchedule.IsBookableStart(start, clock.GetUtcNow())));
         }
         return Result<IReadOnlyList<ReservationAvailabilityDto>>.Success(result);
     }
@@ -116,14 +118,18 @@ public sealed class GuestReservationService(IReservationRepository reservations,
 
             var start = (request.ReservationDateTime ?? reservation.ReservationDateTime).ToUniversalTime();
             var people = request.NumberOfPeople ?? reservation.NumberOfPeople;
-            if (start <= now || start > DateTimeOffset.MaxValue.AddHours(-2))
-                return Result<GuestReservationDto>.Failure("Reservation date must be in the future and within the supported range.");
+            // A contact-only edit can preserve an older booking that predates the public schedule.
+            var rescheduling = start != reservation.ReservationDateTime || people != reservation.NumberOfPeople;
+            if ((request.HasDate || rescheduling) && !GuestReservationSchedule.IsBookableStart(start, now))
+                return Result<GuestReservationDto>.Failure(InvalidSchedule);
+            if (rescheduling && people is < 1 or > GuestReservationSchedule.MaxPeople)
+                return Result<GuestReservationDto>.Failure("Invalid guest party size.");
             var preorder = await orders.GetByReservationIdAsync(id, ct);
             if (preorder is not null && preorder.Status is not (OrderStatus.PreOrdered or OrderStatus.Cancelled))
                 return Result<GuestReservationDto>.Failure("A reservation with an operational order cannot be rescheduled.");
 
             Table? assigned = null;
-            if (start != reservation.ReservationDateTime || people != reservation.NumberOfPeople)
+            if (rescheduling)
             {
                 assigned = await FindAvailableTableAsync(start, people, id, tables.GetByIdForUpdateAsync, ct);
                 if (assigned is null) return Result<GuestReservationDto>.Failure("No table is available for this reservation.");
@@ -132,6 +138,8 @@ public sealed class GuestReservationService(IReservationRepository reservations,
             RequireCredential(reservation, credential, tokens, now);
             if (reservation.ReservationDateTime <= now || start <= now)
                 return Result<GuestReservationDto>.Failure("Only future pending reservations can be edited.");
+            if (rescheduling && !GuestReservationSchedule.IsBookableStart(start, now))
+                return Result<GuestReservationDto>.Failure(InvalidSchedule);
 
             // Mutate only after every check; both records commit or roll back together.
             if (assigned is not null)
@@ -151,7 +159,8 @@ public sealed class GuestReservationService(IReservationRepository reservations,
             if (request.HasNotes) reservation.Notes = Normalize(request.Notes);
             reservation.NumberOfPeople = people;
             reservation.ReservationDateTime = start;
-            reservation.AccessTokenExpiresAt = start.AddHours(2);
+            if (rescheduling)
+                reservation.AccessTokenExpiresAt = start.AddHours(GuestReservationSchedule.DurationHours);
             reservation.UpdatedAt = now;
             // Locked repository reads are tracked. Save only changed properties, not the entire related graph.
             await work.SaveChangesAsync(ct);

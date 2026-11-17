@@ -36,6 +36,48 @@ public class PublicReservationSecurityTests
         Assert.Equal(HttpStatusCode.BadRequest, (await c.GetAsync("/api/v1/public/reservations/availability?" + query)).StatusCode);
     }
 
+    [Theory]
+    [InlineData("telefono")]
+    [InlineData("correo")]
+    [InlineData("vencida")]
+    [InlineData("dia-31")]
+    [InlineData("fuera-de-horario")]
+    [InlineData("segundos")]
+    [InlineData("13-personas")]
+    public async Task Public_create_and_edit_reject_the_same_invalid_values(string scenario)
+    {
+        var guest = new GuestFixture(); using var f = RealGuestApi(guest); using var c = f.Client();
+        c.DefaultRequestHeaders.Add("X-Reservation-Token", guest.Credential);
+        var body = guest.Request;
+        if (scenario == "telefono") body.Phone = "80955501AB";
+        if (scenario == "correo") body.Email = "ana@restaurante";
+        if (scenario == "vencida") body.ReservationDateTime = GuestFixture.NoonInSantoDomingo(-1);
+        if (scenario == "dia-31") body.ReservationDateTime = GuestFixture.NoonInSantoDomingo(31);
+        if (scenario == "fuera-de-horario") body.ReservationDateTime = GuestFixture.NoonInSantoDomingo(1).AddMinutes(-30);
+        if (scenario == "segundos") body.ReservationDateTime = body.ReservationDateTime.AddSeconds(1);
+        if (scenario == "13-personas") body.NumberOfPeople = 13;
+        const string route = "/api/v1/public/reservations";
+        var patch = new { body.Phone, body.Email, body.ReservationDateTime, body.NumberOfPeople };
+        Assert.Equal(HttpStatusCode.BadRequest, (await c.PostAsJsonAsync(route, body)).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await c.PatchAsJsonAsync(route + "/10", patch)).StatusCode);
+        if (scenario is "dia-31" or "13-personas")
+        {
+            var day = body.ReservationDateTime.ToOffset(TimeSpan.FromHours(-4)).ToString("yyyy-MM-dd");
+            Assert.Equal(HttpStatusCode.BadRequest, (await c.GetAsync(
+                $"{route}/availability?date={day}&numberOfPeople={body.NumberOfPeople}")).StatusCode);
+        }
+        guest.F.NoSave();
+    }
+
+    [Fact]
+    public async Task Last_evening_slot_on_day_30_is_accepted_even_when_UTC_is_day_31()
+    {
+        var guest = new GuestFixture(); using var f = RealGuestApi(guest); using var c = f.Client();
+        var body = guest.Request;
+        body.ReservationDateTime = GuestFixture.NoonInSantoDomingo(30).AddHours(9.5);
+        Assert.Equal(HttpStatusCode.Created, (await c.PostAsJsonAsync("/api/v1/public/reservations", body)).StatusCode);
+    }
+
     [Fact]
     public async Task Patch_is_partial_requires_own_token_and_returns_no_secrets()
     {

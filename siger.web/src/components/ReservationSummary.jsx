@@ -1,5 +1,7 @@
 import { formatVisitDate, formatVisitTime } from '../utils/format'
 
+const statusLabels = { Pending: 'Pendiente', Confirmed: 'Confirmada', Cancelled: 'Cancelada', Completed: 'Completada' }
+
 export default function ReservationSummary({ reservation }) {
   return (
     <div className="reservation-summary">
@@ -11,7 +13,7 @@ export default function ReservationSummary({ reservation }) {
         </time>
         <p className="summary-people">{reservation.numberOfPeople} {reservation.numberOfPeople === 1 ? 'persona' : 'personas'}</p>
       </div>
-      <div className="summary-status"><span>Estado:</span><span className="status-badge">Pendiente</span></div>
+      <div className="summary-status"><span>Estado:</span><span className="status-badge">{statusLabels[reservation.status]}</span></div>
       <p className="summary-zone">Hora de República Dominicana</p>
       {reservation.notes && <p className="summary-notes">{reservation.notes}</p>}
     </div>

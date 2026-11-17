@@ -13,12 +13,16 @@ public class GuestReservationEditTests
     public async Task Contact_and_notes_patch_preserves_omitted_fields_identity_and_hash()
     {
         var g = new GuestFixture(); var hash = g.Reservation.AccessTokenHash!.ToArray();
+        g.Reservation.ReservationDateTime = GuestFixture.NoonInSantoDomingo(31).AddMinutes(15);
+        g.Reservation.NumberOfPeople = 13;
+        var expiry = g.Reservation.AccessTokenExpiresAt;
         var date = g.Reservation.ReservationDateTime;
         var result = await g.Guests.UpdateAsync(10, g.Credential, new()
             { Name = " Nueva Ana ", Phone = "8095550123", Email = "ana@empresa.com", Notes = " Ventana " });
         Assert.True(result.IsSuccess); Assert.Equal("Nueva Ana", result.Value!.Name);
         Assert.Equal("8095550123", result.Value.Phone); Assert.Equal("ana@empresa.com", result.Value.Email);
         Assert.Equal("Ventana", result.Value.Notes); Assert.Equal(date, result.Value.ReservationDateTime);
+        Assert.Equal(13, result.Value.NumberOfPeople); Assert.Equal(expiry, result.Value.AccessExpiresAt);
         Assert.Equal(hash, g.Reservation.AccessTokenHash); Assert.Equal(4, g.Reservation.TableId);
         Assert.Equal(ReservationStatus.Pending, result.Value.Status);
         var second = await g.Guests.UpdateAsync(10, g.Credential, new() { Email = null, Notes = null });

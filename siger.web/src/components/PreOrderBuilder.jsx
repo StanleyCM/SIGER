@@ -4,7 +4,8 @@ import { formatAmount } from '../utils/format'
 import ProductCatalog from './ProductCatalog'
 import { MAX_PREORDER_PRODUCTS, MAX_PRODUCT_QUANTITY } from '../config/preorder'
 
-export default function PreOrderBuilder({ reservationId, token, expiresAt, onCreated, onFinish, busy, setBusy }) {
+export default function PreOrderBuilder({ reservationId, token, expiresAt, onCreated, onFinish, busy, setBusy,
+  blocked, onUncertain, runWrite = (operation) => operation() }) {
   const [items, setItems] = useState([])
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -30,12 +31,17 @@ export default function PreOrderBuilder({ reservationId, token, expiresAt, onCre
 
   async function submit(event) {
     event.preventDefault()
-    if (busy || items.length === 0) return
+    if (busy || blocked || items.length === 0) return
     if (new Date(expiresAt) <= new Date()) { setError('El acceso a esta reserva venció. Contacta al restaurante para continuar.'); return }
-    setBusy(true)
-    setError('')
-    try { onCreated(await createPreOrder(reservationId, token, items)) }
-    catch (failure) { setError(failure.message); setBusy(false) }
+    await runWrite(async () => {
+      setBusy(true)
+      setError('')
+      try { onCreated(await createPreOrder(reservationId, token, items)) }
+      catch (failure) {
+        if (onUncertain && (failure.uncertain || failure.status === 409)) onUncertain(failure.message)
+        else setError(failure.message)
+      } finally { setBusy(false) }
+    })
   }
 
   return (
@@ -65,7 +71,7 @@ export default function PreOrderBuilder({ reservationId, token, expiresAt, onCre
         <p className="field-hint">No se realizará ningún pago. La reservación permanece pendiente de confirmación.</p>
         {error && <p className="error-message" role="alert">{error}</p>}
         <div className="actions">
-          <button className="button" type="submit" disabled={busy || items.length === 0}>{busy ? 'Guardando preorden…' : 'Guardar preorden'}</button>
+          <button className="button" type="submit" disabled={busy || blocked || items.length === 0}>{busy ? 'Guardando preorden…' : 'Guardar preorden'}</button>
           <button className="text-button" type="button" disabled={busy} onClick={onFinish}>Finalizar sin preorden</button>
         </div>
       </form>
