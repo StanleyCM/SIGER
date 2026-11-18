@@ -65,7 +65,10 @@ public sealed class PreOrderService(IReservationRepository reservations, IOrderR
         var reservation = await reservations.GetByIdAsync(reservationId, cancellationToken);
         GuestReservationService.RequireCredential(reservation, credential, tokens, clock.GetUtcNow());
         var order = await orders.GetByReservationIdAsync(reservationId, cancellationToken);
-        return order is null ? Result<PreOrderDto>.Failure("Order not found.") : Result<PreOrderDto>.Success(Map(order));
+        // Staff may open a separate restaurant order for a guest who never placed a Web preorder.
+        return order is { Origin: OrderOrigin.Web }
+            ? Result<PreOrderDto>.Success(Map(order))
+            : Result<PreOrderDto>.Failure("Order not found.");
     }
 
     private static PreOrderDto Map(Order order) => new()

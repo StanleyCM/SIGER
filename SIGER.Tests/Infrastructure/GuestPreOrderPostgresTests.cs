@@ -1,3 +1,7 @@
+using System.Net;
+using System.Net.Http.Json;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -5,6 +9,7 @@ using Npgsql;
 using SIGER.Application.DTOs.Orders;
 using SIGER.Application.DTOs.Payments;
 using SIGER.Application.DTOs.Reservations;
+using SIGER.Application.DTOs.Categories;
 using SIGER.Application.Interfaces.Repositories;
 using SIGER.Application.Interfaces.Services;
 using SIGER.Application.Services;
@@ -13,6 +18,7 @@ using SIGER.Domain.Exceptions;
 using SIGER.Infrastructure.DependencyInjection;
 using SIGER.Infrastructure.Persistence;
 using SIGER.Tests.Application;
+using SIGER.Tests.API;
 
 namespace SIGER.Tests.Infrastructure;
 
@@ -444,6 +450,167 @@ public sealed class GuestPreOrderPostgresTests : IAsyncLifetime
         Assert.Equal(0, yesterday.TotalOrders);
         Assert.Equal(0m, yesterday.TotalRevenue);
         Assert.Empty(yesterday.TopSellingProducts);
+    }
+
+    [LocalPostgresFact]
+    public async Task Http_workflows_use_real_roles_reservations_orders_payments_and_audit_in_Postgres()
+    {
+        await Sql("""
+            INSERT INTO rol(id_rol,nombre) VALUES (11,'Mesero'),(12,'Cocinero'),(13,'Cajero');
+            INSERT INTO usuario(id_usuario,id_rol,auth_user_id,nombre,apellido,email) VALUES
+                (11,11,'00000000-0000-0000-0000-000000000011','Waiter','Test','waiter@example.invalid'),
+                (12,12,'00000000-0000-0000-0000-000000000012','Kitchen','Test','kitchen@example.invalid'),
+                (13,13,'00000000-0000-0000-0000-000000000013','Cashier','Test','cashier@example.invalid');
+            """);
+        using var factory = new ApiFactory
+        {
+            DisposablePostgresConnection = connection,
+            ConfigureBackend = services => services.AddSingleton<TimeProvider>(clock),
+        };
+        using var web = factory.Client();
+        using var admin = Staff(1);
+        using var waiter = Staff(11);
+        using var kitchen = Staff(12);
+        using var cashier = Staff(13);
+        var firstSlot = GuestFixture.NoonInSantoDomingo(1);
+
+        HttpClient Staff(int id)
+        {
+            var client = factory.Client();
+            client.DefaultRequestHeaders.Authorization =
+                new("Bearer", factory.Token(subject: $"00000000-0000-0000-0000-{id:D12}"));
+            return client;
+        }
+
+        async Task<OrderDto> GetOrder(long id) => await ReadHttp<OrderDto>(
+            await waiter.GetAsync($"/api/v1/orders/{id}"), HttpStatusCode.OK);
+
+        async Task CookAndPay(OrderDto order)
+        {
+            var kitchenPath = $"/api/v1/kitchen/orders/{order.Id}";
+            using var starting = await kitchen.PatchAsync(kitchenPath + "/in-preparation", null);
+            Assert.Equal(OrderStatus.InPreparation, (await ReadHttp<OrderDto>(starting, HttpStatusCode.OK)).Status);
+            using var ready = await kitchen.PatchAsync(kitchenPath + "/ready", null);
+            var prepared = await ReadHttp<OrderDto>(ready, HttpStatusCode.OK);
+            Assert.Equal(OrderStatus.Ready, prepared.Status);
+            using var serving = await waiter.PatchAsJsonAsync($"/api/v1/orders/{order.Id}/status",
+                new { status = "Served", version = prepared.Version });
+            var served = await ReadHttp<OrderDto>(serving, HttpStatusCode.OK);
+            using var asking = await waiter.PostAsJsonAsync($"/api/v1/orders/{order.Id}/request-account",
+                new { accountRequested = true, version = served.Version });
+            Assert.True((await ReadHttp<OrderDto>(asking, HttpStatusCode.OK)).AccountRequested);
+            using var forbidden = await waiter.PostAsJsonAsync("/api/v1/payments",
+                new { orderId = order.Id, amount = order.Total, method = "Cash" });
+            Assert.Equal(HttpStatusCode.Forbidden, forbidden.StatusCode);
+            using var payment = await cashier.PostAsJsonAsync("/api/v1/payments",
+                new { orderId = order.Id, amount = order.Total, method = "Cash" });
+            var paid = await ReadHttp<PaymentDto>(payment, HttpStatusCode.Created);
+            Assert.Equal(13, paid.UserId);
+            Assert.Equal(order.Total, paid.Amount);
+            Assert.Equal(OrderStatus.Paid, (await GetOrder(order.Id)).Status);
+            Assert.Equal("Disponible", await Sql("SELECT estado::text FROM mesa WHERE id_mesa=1"));
+        }
+
+        async Task<GuestReservationCreatedDto> Book(DateTimeOffset slot)
+        {
+            using var response = await web.PostAsJsonAsync("/api/v1/public/reservations", Request(slot));
+            return await ReadHttp<GuestReservationCreatedDto>(response, HttpStatusCode.Created);
+        }
+
+        // A: public preorder is activated in place, keeping identity, prices and guest access.
+        var first = await Book(firstSlot);
+        web.DefaultRequestHeaders.Add("X-Reservation-Token", first.AccessToken);
+        var firstPath = $"/api/v1/reservations/{first.Reservation.Id}";
+        using var preorderResponse = await web.PostAsJsonAsync($"/api/v1/public/reservations/{first.Reservation.Id}/preorder", Items);
+        var preorder = await ReadHttp<PreOrderDto>(preorderResponse, HttpStatusCode.Created);
+        Assert.Equal(25m, preorder.Total);
+        using var queue = await kitchen.GetAsync("/api/v1/kitchen/orders");
+        Assert.DoesNotContain(await ReadHttp<OrderDto[]>(queue, HttpStatusCode.OK), order => order.Id == preorder.Id);
+        await Sql("UPDATE producto SET precio=99 WHERE id_producto=1");
+        clock.Now = firstSlot;
+        using var activation = await waiter.PostAsync(firstPath + "/activate-preorder", null);
+        var activated = await ReadHttp<OrderDto>(activation, HttpStatusCode.OK);
+        Assert.Equal(preorder.Id, activated.Id);
+        Assert.Equal(first.Reservation.Id, activated.ReservationId);
+        Assert.Equal(preorder.Total, activated.Total);
+        Assert.Equal(12.50m, Assert.Single(activated.Details).UnitPrice);
+        using var publicPreorder = await web.GetAsync($"/api/v1/public/reservations/{first.Reservation.Id}/preorder");
+        Assert.Equal(preorder.Id, (await ReadHttp<PreOrderDto>(publicPreorder, HttpStatusCode.OK)).Id);
+        await CookAndPay(activated);
+
+        // B: after reception, only one linked order can be created and it stays internal.
+        var second = await Book(firstSlot.AddHours(2));
+        var secondPath = $"/api/v1/reservations/{second.Reservation.Id}";
+        clock.Now = firstSlot.AddHours(2);
+        using var reception = await waiter.PostAsync(secondPath + "/receive", null);
+        Assert.Equal(ReservationStatus.Completed, (await ReadHttp<ReservationDto>(reception, HttpStatusCode.OK)).Status);
+        var linkedRequest = new
+        {
+            reservationId = second.Reservation.Id, type = "Table", origin = "Web",
+            items = new[] { new { productId = 1, quantity = 1, note = "Staff-only note" } }
+        };
+        using var linkedResponse = await waiter.PostAsJsonAsync("/api/v1/orders", linkedRequest);
+        var linked = await ReadHttp<OrderDto>(linkedResponse, HttpStatusCode.Created);
+        Assert.Equal(second.Reservation.Id, linked.ReservationId);
+        Assert.Equal(OrderOrigin.Desktop, linked.Origin);
+        using var duplicate = await waiter.PostAsJsonAsync("/api/v1/orders", linkedRequest);
+        Assert.Equal(HttpStatusCode.Conflict, duplicate.StatusCode);
+        web.DefaultRequestHeaders.Remove("X-Reservation-Token");
+        web.DefaultRequestHeaders.Add("X-Reservation-Token", second.AccessToken);
+        using var lookup = await web.GetAsync($"/api/v1/public/reservations/{second.Reservation.Id}/preorder");
+        Assert.Equal(HttpStatusCode.NotFound, lookup.StatusCode);
+        Assert.DoesNotContain("Staff-only note", await lookup.Content.ReadAsStringAsync());
+        await CookAndPay(linked);
+
+        // C: invalid inputs return 400 without occupying the table or inserting an order.
+        var orderCount = await Sql("SELECT count(*) FROM orden");
+        foreach (var items in new[] { "null", "[null]", "[{\"productId\":1,\"quantity\":2147483647}]" })
+        {
+            using var body = new StringContent($$"""{"tableId":1,"type":"Table","items":{{items}}}""",
+                System.Text.Encoding.UTF8, "application/json");
+            using var invalid = await waiter.PostAsync("/api/v1/orders", body);
+            Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
+        }
+        Assert.Equal(orderCount, await Sql("SELECT count(*) FROM orden"));
+        Assert.Equal("Disponible", await Sql("SELECT estado::text FROM mesa WHERE id_mesa=1"));
+        using var directResponse = await waiter.PostAsJsonAsync("/api/v1/orders",
+            new { tableId = 1, type = "Table", items = new[] { new { productId = 1, quantity = 1 } } });
+        await CookAndPay(await ReadHttp<OrderDto>(directResponse, HttpStatusCode.Created));
+
+        // D: a takeaway can advance to preparation and be paid before serving, without a table.
+        using var takeawayResponse = await waiter.PostAsJsonAsync("/api/v1/orders",
+            new { type = "TakeAway", items = new[] { new { productId = 1, quantity = 1 } } });
+        var takeaway = await ReadHttp<OrderDto>(takeawayResponse, HttpStatusCode.Created);
+        Assert.Null(takeaway.TableId);
+        using var preparing = await kitchen.PatchAsync($"/api/v1/kitchen/orders/{takeaway.Id}/in-preparation", null);
+        Assert.Equal(OrderStatus.InPreparation, (await ReadHttp<OrderDto>(preparing, HttpStatusCode.OK)).Status);
+        using var earlyPayment = await cashier.PostAsJsonAsync("/api/v1/payments",
+            new { orderId = takeaway.Id, amount = takeaway.Total, method = "Cash" });
+        Assert.Equal(HttpStatusCode.Created, earlyPayment.StatusCode);
+        Assert.Equal(OrderStatus.Paid, (await GetOrder(takeaway.Id)).Status);
+
+        // E: real admin writes and audit reads in the disposable database.
+        using var denied = await waiter.GetAsync("/api/v1/audits");
+        Assert.Equal(HttpStatusCode.Forbidden, denied.StatusCode);
+        using var categoryResponse = await admin.PostAsJsonAsync("/api/v1/categories", new { name = "Audit category" });
+        var category = await ReadHttp<CategoryDto>(categoryResponse, HttpStatusCode.Created);
+        using var fetched = await admin.GetAsync($"/api/v1/categories/{category.Id}");
+        Assert.Equal(category.Name, (await ReadHttp<CategoryDto>(fetched, HttpStatusCode.OK)).Name);
+        using var audit = await admin.GetAsync("/api/v1/audits?entity=Category");
+        Assert.Equal(HttpStatusCode.OK, audit.StatusCode);
+        Assert.Contains("Category", await audit.Content.ReadAsStringAsync());
+    }
+
+    private static readonly JsonSerializerOptions HttpJson = new(JsonSerializerDefaults.Web)
+    {
+        Converters = { new JsonStringEnumConverter() }
+    };
+
+    private static async Task<T> ReadHttp<T>(HttpResponseMessage response, HttpStatusCode expected)
+    {
+        Assert.True(response.StatusCode == expected,
+            $"Expected {expected}, received {response.StatusCode} from {response.RequestMessage?.RequestUri?.AbsolutePath}.");
+        return (await response.Content.ReadFromJsonAsync<T>(HttpJson))!;
     }
 
     public async Task DisposeAsync()

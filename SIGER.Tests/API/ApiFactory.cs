@@ -34,6 +34,7 @@ internal sealed class ApiFactory : WebApplicationFactory<Program>
     public string AllowedOrigin { get; set; } = "https://allowed.example.test";
     public string EnvironmentName { get; set; } = "Development";
     public Action<IServiceCollection>? ConfigureBackend { get; set; }
+    public string? DisposablePostgresConnection { get; init; }
     public Mock<IUserRepository> Users { get; } = new();
     public Mock<T> Service<T>() where T : class => (Mock<T>)mocks[typeof(T)];
 
@@ -55,7 +56,7 @@ internal sealed class ApiFactory : WebApplicationFactory<Program>
         builder.UseEnvironment(EnvironmentName);
         var values = new Dictionary<string, string?>
         {
-            ["ConnectionStrings:SIGERDatabase"] = "Host=127.0.0.1;Port=1;Database=never_connect;Username=test",
+            ["ConnectionStrings:SIGERDatabase"] = DisposablePostgresConnection ?? "Host=127.0.0.1;Port=1;Database=never_connect;Username=test",
             ["Supabase:Url"] = "https://test.invalid",
             ["Supabase:ServiceRoleKey"] = "synthetic-test-only",
             ["Supabase:JwtIssuer"] = Issuer,
@@ -68,20 +69,23 @@ internal sealed class ApiFactory : WebApplicationFactory<Program>
         builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(values));
         builder.ConfigureTestServices(services =>
         {
-            foreach (var pair in mocks)
+            if (DisposablePostgresConnection is null)
             {
-                services.RemoveAll(pair.Key);
-                services.AddSingleton(pair.Key, pair.Value.Object);
+                foreach (var pair in mocks)
+                {
+                    services.RemoveAll(pair.Key);
+                    services.AddSingleton(pair.Key, pair.Value.Object);
+                }
+                // Every repository is strict and disconnected. An accidental call fails locally.
+                foreach (var type in typeof(IUserRepository).Assembly.GetTypes().Where(t =>
+                             t.IsInterface && t.Namespace == "SIGER.Application.Interfaces.Repositories"))
+                {
+                    services.RemoveAll(type);
+                    var mock = (Mock)Activator.CreateInstance(typeof(Mock<>).MakeGenericType(type), MockBehavior.Strict)!;
+                    services.AddSingleton(type, mock.Object);
+                }
+                services.RemoveAll<IUserRepository>(); services.AddSingleton(Users.Object);
             }
-            // Every repository is strict and disconnected. An accidental call fails locally.
-            foreach (var type in typeof(IUserRepository).Assembly.GetTypes().Where(t =>
-                         t.IsInterface && t.Namespace == "SIGER.Application.Interfaces.Repositories"))
-            {
-                services.RemoveAll(type);
-                var mock = (Mock)Activator.CreateInstance(typeof(Mock<>).MakeGenericType(type), MockBehavior.Strict)!;
-                services.AddSingleton(type, mock.Object);
-            }
-            services.RemoveAll<IUserRepository>(); services.AddSingleton(Users.Object);
             ConfigureBackend?.Invoke(services);
             services.PostConfigure<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme, options =>
             {

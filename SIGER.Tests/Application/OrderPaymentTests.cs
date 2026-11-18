@@ -49,6 +49,17 @@ public class OrderPaymentTests
     }
 
     [Fact]
+    public async Task Oversize_line_changes_are_rejected_before_mutation()
+    {
+        var total = f.Order.Total;
+        Assert.True((await f.OrderService.AddItemAsync(5, new() { ProductId = 3, Quantity = int.MaxValue }, f.Token)).IsFailure);
+        Assert.True((await f.OrderService.UpdateItemAsync(5, new() { OrderDetailId = 6, Quantity = int.MaxValue }, f.Token)).IsFailure);
+        Assert.Equal(total, f.Order.Total);
+        Assert.Equal(2, Assert.Single(f.Order.Details).Quantity);
+        f.NoSave();
+    }
+
+    [Fact]
     public async Task Paid_status_requires_payment_workflow()
     {
         Assert.True((await f.OrderService.UpdateStatusAsync(5, new() { Status = OrderStatus.Paid, Version = 5 })).IsFailure);

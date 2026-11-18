@@ -11,6 +11,8 @@ namespace SIGER.Application.Services;
 
 public class OrderService : IOrderService
 {
+    private const decimal MaxStoredTotal = 9_999_999_999.99m;
+    private const string InvalidTotal = "The order total exceeds the supported monetary range.";
     private readonly IOrderRepository _orderRepository;
     private readonly ITableRepository _tableRepository;
     private readonly IProductRepository _productRepository;
@@ -42,6 +44,11 @@ public class OrderService : IOrderService
 
     private async Task<Result<OrderDto>> CreateOrderInTransactionAsync(CreateOrderRequestDto request, CancellationToken cancellationToken)
     {
+        if (request.Items is not { Count: > 0 }) return Result<OrderDto>.Failure("The order must contain at least one product.");
+        if (request.Notes?.Trim().Length > 500) return Result<OrderDto>.Failure("Order notes cannot exceed 500 characters.");
+        if (request.Items.Any(item => item is null || item.Quantity <= 0 || item.Note?.Trim().Length > 300))
+            return Result<OrderDto>.Failure("Order items require a positive quantity and notes of at most 300 characters.");
+
         var user = await _userRepository.GetByIdAsync(request.UserId, cancellationToken);
         if (user is null || !user.IsActive) return Result<OrderDto>.Failure("The creator user does not exist or is inactive.");
 
@@ -93,28 +100,27 @@ public class OrderService : IOrderService
             return Result<OrderDto>.Failure("A table order requires a table.");
         }
 
-        if (request.Items.Count == 0) return Result<OrderDto>.Failure("The order must contain at least one product.");
-
         var order = new Order
         {
             ReservationId = request.ReservationId, Reservation = reservation,
             TableId = table?.Id, Table = table, UserId = user.Id, User = user, ClientId = client?.Id, Client = client,
-            OrderDateTime = now, UpdatedAt = now, Status = OrderStatus.Pending, Origin = request.Origin,
+            OrderDateTime = now, UpdatedAt = now, Status = OrderStatus.Pending,
+            Origin = reservation is null ? request.Origin : OrderOrigin.Desktop,
             Type = request.Type, Notes = Normalize(request.Notes), AccountRequested = false, Version = 0
         };
 
-        if (request.Items.Any(item => item.Quantity <= 0))
-            return Result<OrderDto>.Failure("All product quantities must be greater than zero.");
         var products = (await _productRepository.GetByIdsAsync(
             request.Items.Select(item => item.ProductId).Distinct().ToArray(), cancellationToken)).ToDictionary(product => product.Id);
         foreach (var itemRequest in request.Items)
         {
             products.TryGetValue(itemRequest.ProductId, out var product);
             if (product is null || !product.IsAvailable) return Result<OrderDto>.Failure($"Product {itemRequest.ProductId} does not exist or is unavailable.");
-            order.Details.Add(CreateDetail(order, product, itemRequest.Quantity, itemRequest.Note));
+            if (!FitsTotal(order.Total, product.Price, itemRequest.Quantity)) return Result<OrderDto>.Failure(InvalidTotal);
+            var detail = CreateDetail(order, product, itemRequest.Quantity, itemRequest.Note);
+            order.Details.Add(detail);
+            order.Total += detail.Subtotal;
         }
 
-        RecalculateTotal(order);
         if (reservation is not null && reservation.Status != ReservationStatus.Completed)
         {
             reservation.Status = ReservationStatus.Completed;
@@ -150,11 +156,14 @@ public class OrderService : IOrderService
     public async Task<Result<OrderDto>> AddItemAsync(long orderId, AddOrderItemRequestDto request, CancellationToken cancellationToken = default)
     {
         if (request.Quantity <= 0) return Result<OrderDto>.Failure("Quantity must be greater than zero.");
+        if (request.Note?.Trim().Length > 300) return Result<OrderDto>.Failure("Item notes cannot exceed 300 characters.");
         var order = await _orderRepository.GetWithDetailsAsync(orderId, cancellationToken);
         var stateError = ValidateEditable(order);
         if (stateError is not null) return Result<OrderDto>.Failure(stateError);
         var product = await _productRepository.GetByIdAsync(request.ProductId, cancellationToken);
         if (product is null || !product.IsAvailable) return Result<OrderDto>.Failure("Product does not exist or is unavailable.");
+        if (!FitsTotal(order!.Details.Sum(detail => detail.Subtotal), product.Price, request.Quantity))
+            return Result<OrderDto>.Failure(InvalidTotal);
         order!.Details.Add(CreateDetail(order, product, request.Quantity, request.Note));
         RecalculateTotal(order);
         order.UpdatedAt = DateTimeOffset.UtcNow;
@@ -166,6 +175,7 @@ public class OrderService : IOrderService
     public async Task<Result<OrderDto>> UpdateItemAsync(long orderId, UpdateOrderItemRequestDto request, CancellationToken cancellationToken = default)
     {
         if (request.Quantity <= 0) return Result<OrderDto>.Failure("Quantity must be greater than zero.");
+        if (request.Note?.Trim().Length > 300) return Result<OrderDto>.Failure("Item notes cannot exceed 300 characters.");
         var order = await _orderRepository.GetWithDetailsAsync(orderId, cancellationToken);
         var stateError = ValidateEditable(order);
         if (stateError is not null) return Result<OrderDto>.Failure(stateError);
@@ -173,6 +183,8 @@ public class OrderService : IOrderService
         if (detail is null) return Result<OrderDto>.Failure("Order item not found.");
         var product = await _productRepository.GetByIdAsync(detail.ProductId, cancellationToken);
         if (product is null || !product.IsAvailable) return Result<OrderDto>.Failure("Product does not exist or is unavailable.");
+        if (!FitsTotal(order.Details.Where(item => item.Id != detail.Id).Sum(item => item.Subtotal), detail.UnitPrice, request.Quantity))
+            return Result<OrderDto>.Failure(InvalidTotal);
         detail.Product = product;
         detail.Quantity = request.Quantity;
         detail.Subtotal = detail.UnitPrice * request.Quantity;
@@ -255,6 +267,9 @@ public class OrderService : IOrderService
     };
 
     private static void RecalculateTotal(Order order) => order.Total = order.Details.Sum(detail => detail.Subtotal);
+    private static bool FitsTotal(decimal existingAmount, decimal unitPrice, int quantity)
+        => unitPrice >= 0 && existingAmount <= MaxStoredTotal && unitPrice <= (MaxStoredTotal - existingAmount) / quantity &&
+            existingAmount + unitPrice * quantity <= MaxStoredTotal;
     private static string? Normalize(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     private static OrderDto Map(Order order) => new()
