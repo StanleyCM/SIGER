@@ -24,6 +24,41 @@ public class ClosureRegressionTests
         f.Work.Verify(x => x.SaveChangesAsync(f.Token), Times.Once);
     }
 
+    [Theory]
+    [InlineData(false)] [InlineData(true)]
+    public async Task Payment_releases_table_only_without_other_active_orders(bool anotherOrder)
+    {
+        var f = new ServiceFixture();
+        f.Table.Status = TableStatus.Occupied;
+        f.Orders.Setup(x => x.HasActiveOrdersAsync(4, 5, f.Token)).ReturnsAsync(() =>
+        { Assert.True(f.InTransaction); return anotherOrder; });
+        var result = await f.PaymentService.ProcessPaymentAsync(
+            new() { OrderId = 5, UserId = 1, Amount = 25m, Method = PaymentMethod.Cash }, f.Token);
+        Assert.True(result.IsSuccess);
+        Assert.Equal(OrderStatus.Paid, f.Order.Status);
+        Assert.Equal(anotherOrder ? TableStatus.Occupied : TableStatus.Available, f.Table.Status);
+        f.Tables.Verify(x => x.GetByIdForUpdateAsync(4, f.Token), Times.Once);
+        f.Orders.Verify(x => x.HasActiveOrdersAsync(4, 5, f.Token), Times.Once);
+        f.Work.Verify(x => x.SaveChangesAsync(f.Token), Times.Once);
+    }
+
+    [Theory]
+    [InlineData(false)] [InlineData(true)]
+    public async Task Table_status_change_rejects_releasing_table_with_active_orders(bool hasActiveOrder)
+    {
+        var f = new ServiceFixture();
+        f.Table.Status = TableStatus.Occupied;
+        f.Orders.Setup(x => x.HasActiveOrdersAsync(4, 0, f.Token)).ReturnsAsync(() =>
+        { Assert.True(f.InTransaction); return hasActiveOrder; });
+        var result = await f.TableService.ChangeStatusAsync(
+            4, new() { Status = TableStatus.Available, Version = 5 }, f.Token);
+        Assert.Equal(!hasActiveOrder, result.IsSuccess);
+        Assert.Equal(hasActiveOrder ? TableStatus.Occupied : TableStatus.Available, f.Table.Status);
+        f.Tables.Verify(x => x.GetByIdForUpdateAsync(4, f.Token), Times.Once);
+        if (hasActiveOrder) f.NoSave();
+        else f.Work.Verify(x => x.SaveChangesAsync(f.Token), Times.Once);
+    }
+
     [Fact]
     public async Task Quantity_change_preserves_original_price()
     {

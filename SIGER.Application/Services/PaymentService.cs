@@ -65,7 +65,7 @@ public class PaymentService : IPaymentService
         order.Status = OrderStatus.Paid;
         order.UpdatedAt = now;
         _orderRepository.Update(order);
-        if (table is not null)
+        if (table is not null && !await _orderRepository.HasActiveOrdersAsync(table.Id, order.Id, cancellationToken))
         {
             table.Status = TableStatus.Available;
             table.UpdatedAt = now;

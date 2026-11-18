@@ -4,6 +4,7 @@ using SIGER.Application.Interfaces.Persistence;
 using SIGER.Application.Interfaces.Repositories;
 using SIGER.Application.Interfaces.Services;
 using SIGER.Domain.Entities;
+using SIGER.Domain.Enums;
 using SIGER.Domain.Exceptions;
 
 namespace SIGER.Application.Services;
@@ -12,11 +13,13 @@ public class TableService : ITableService
 {
     private readonly ITableRepository _tableRepository;
     private readonly IUnitOfWork _unitOfWork;
+    private readonly IOrderRepository? _orderRepository;
 
-    public TableService(ITableRepository tableRepository, IUnitOfWork unitOfWork)
+    public TableService(ITableRepository tableRepository, IUnitOfWork unitOfWork, IOrderRepository? orderRepository = null)
     {
         _tableRepository = tableRepository;
         _unitOfWork = unitOfWork;
+        _orderRepository = orderRepository;
     }
 
     public async Task<Result<TableDto>> CreateAsync(CreateTableRequestDto request, CancellationToken cancellationToken = default)
@@ -69,11 +72,18 @@ public class TableService : ITableService
         return Result<TableDto>.Success(Map(table));
     }
 
-    public async Task<Result> ChangeStatusAsync(long id, UpdateTableStatusRequestDto request, CancellationToken cancellationToken = default)
+    public Task<Result> ChangeStatusAsync(long id, UpdateTableStatusRequestDto request, CancellationToken cancellationToken = default)
+        => _unitOfWork.ExecuteInTransactionAsync(token => ChangeStatusInTransactionAsync(id, request, token), cancellationToken);
+
+    private async Task<Result> ChangeStatusInTransactionAsync(long id, UpdateTableStatusRequestDto request, CancellationToken cancellationToken)
     {
-        var table = await _tableRepository.GetByIdAsync(id, cancellationToken);
+        var table = await _tableRepository.GetByIdForUpdateAsync(id, cancellationToken);
         if (table is null) return Result.Failure("Table not found.");
         if (table.Version != request.Version) throw new BusinessRuleException("The table changed. Reload it and try again.");
+        if (request.Status != TableStatus.Occupied && _orderRepository is not null &&
+            await _orderRepository.HasActiveOrdersAsync(table.Id, 0, cancellationToken))
+            return Result.Failure("A table with active orders cannot change status.");
+
         table.Status = request.Status;
         table.UpdatedAt = DateTimeOffset.UtcNow;
         _tableRepository.Update(table);

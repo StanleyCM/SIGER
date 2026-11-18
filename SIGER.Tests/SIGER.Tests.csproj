@@ -20,4 +20,9 @@
     <ProjectReference Include="../SIGER.API/SIGER.API.csproj" />
     <Using Include="Xunit" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Exercise the same platform-neutral Desktop source without loading WinForms. -->
+    <Compile Include="../SIGER.Desktop/Models/*.cs" LinkBase="Desktop/Models" />
+    <Compile Include="../SIGER.Desktop/Services/*.cs" LinkBase="Desktop/Services" />
+  </ItemGroup>
 </Project>

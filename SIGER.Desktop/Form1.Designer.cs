@@ -29,9 +29,12 @@
         private void InitializeComponent()
         {
             components = new System.ComponentModel.Container();
-            AutoScaleMode = AutoScaleMode.Font;
-            ClientSize = new Size(800, 450);
-            Text = "Form1";
+            AutoScaleMode = AutoScaleMode.Dpi;
+            ClientSize = new Size(1110, 660);
+            MinimumSize = new Size(810, 545);
+            StartPosition = FormStartPosition.CenterScreen;
+            Font = SIGER.Desktop.Controls.DesktopTheme.Body;
+            Text = "SIGER Desktop | Superior Kitchen Essentials";
         }
 
         #endregion

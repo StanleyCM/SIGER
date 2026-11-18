@@ -27,7 +27,8 @@ public static class ResultHttpExtensions
         "Product is not associated with the promotion.",
         "Only ready orders can be served.",
         "Kitchen transitions must advance from pending to preparation to ready.",
-        "The table already has an overlapping reservation."
+        "The table already has an overlapping reservation.",
+        "A table with active orders cannot change status."
     ];
 
     public static IActionResult ToHttp<T>(this Result<T> result, ControllerBase controller,
