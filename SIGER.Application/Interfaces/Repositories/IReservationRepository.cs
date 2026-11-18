@@ -9,6 +9,7 @@ public interface IReservationRepository
     Task<Reservation?> GetByIdAsync(long id, CancellationToken cancellationToken = default);
     Task<Reservation?> GetByIdForUpdateAsync(long id, CancellationToken cancellationToken = default);
     Task<bool> HasOverlapAsync(long tableId, DateTimeOffset start, DateTimeOffset end, long? excludingId = null, CancellationToken cancellationToken = default);
+    Task<bool> HasReceivedPartyAsync(long tableId, DateTimeOffset now, CancellationToken cancellationToken = default);
     Task<PaginatedResult<Reservation>> GetPagedAsync(
         int pageNumber,
         int pageSize,

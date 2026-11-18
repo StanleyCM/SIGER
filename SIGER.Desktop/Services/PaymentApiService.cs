@@ -1,6 +1,7 @@
 using System.Net;
 using SIGER.Application.DTOs.Orders;
 using SIGER.Application.DTOs.Payments;
+using SIGER.Application.Services;
 using SIGER.Domain.Enums;
 
 namespace SIGER.Desktop.Services;
@@ -28,8 +29,8 @@ internal sealed class PaymentApiService(ApiClient api)
         {
             if (currentOrder.Id != orderId)
                 throw new ApiException("La orden seleccionada no coincide con la solicitud de pago.");
-            if (!CanProcessPayment(currentOrder.Status))
-                throw new ApiException("El estado actual de la orden no permite registrar un pago.");
+            if (GetPaymentBlockReason(currentOrder) is { } reason)
+                throw new ApiException(reason);
             if (amount != currentOrder.Total)
                 throw new ApiException("El monto enviado debe coincidir exactamente con el total de la orden calculado por el servidor.");
         }
@@ -70,11 +71,26 @@ internal sealed class PaymentApiService(ApiClient api)
         }
     }
 
-    internal static bool CanProcessPayment(OrderStatus status) =>
-        status is OrderStatus.Pending or OrderStatus.InPreparation or OrderStatus.Ready or OrderStatus.Served;
-
     internal static bool CanProcessPayment(OrderDto? order, PaymentDto? existingPayment = null) =>
-        order is not null && existingPayment is null && CanProcessPayment(order.Status) && order.Total > 0;
+        order is not null && GetPaymentBlockReason(order, existingPayment) is null;
+
+    internal static string? GetPaymentBlockReason(OrderDto order, PaymentDto? existingPayment = null)
+    {
+        if (existingPayment is not null) return "Esta orden ya tiene un pago registrado.";
+        if (PaymentService.GetPaymentStateError(order.Type, order.Status, order.AccountRequested) is { } error)
+            return TranslatePaymentConflict(error) ?? $"El estado actual ({OrderApiService.FormatStatus(order.Status)}) no admite cobro.";
+        return order.Total <= 0 ? "El total de la orden debe ser mayor que cero." : null;
+    }
+
+    internal static string? TranslatePaymentConflict(string? detail) => detail switch
+    {
+        PaymentService.TableOrderNotServed => "La orden de mesa debe estar servida antes de cobrar.",
+        PaymentService.AccountNotRequested => "El mesero debe solicitar la cuenta antes de cobrar.",
+        "The order is already paid." or "A payment already exists for this order." => "Esta orden ya tiene un pago registrado.",
+        "A cancelled order cannot be paid." => "No se puede cobrar una orden cancelada.",
+        "A preorder is not operational." => "No se puede cobrar una preorden sin activar.",
+        _ => null
+    };
 
     internal static string FormatMethod(PaymentMethod method) => method switch
     {

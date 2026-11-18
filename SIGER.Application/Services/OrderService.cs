@@ -16,19 +16,25 @@ public class OrderService : IOrderService
     private readonly IProductRepository _productRepository;
     private readonly IUserRepository _userRepository;
     private readonly IUnitOfWork _unitOfWork;
+    private readonly IReservationRepository _reservationRepository;
+    private readonly TimeProvider _clock;
 
     public OrderService(
         IOrderRepository orderRepository,
         ITableRepository tableRepository,
         IProductRepository productRepository,
         IUserRepository userRepository,
-        IUnitOfWork unitOfWork)
+        IUnitOfWork unitOfWork,
+        IReservationRepository reservationRepository,
+        TimeProvider? clock = null)
     {
         _orderRepository = orderRepository;
         _tableRepository = tableRepository;
         _productRepository = productRepository;
         _userRepository = userRepository;
         _unitOfWork = unitOfWork;
+        _reservationRepository = reservationRepository;
+        _clock = clock ?? TimeProvider.System;
     }
 
     public Task<Result<OrderDto>> CreateOrderAsync(CreateOrderRequestDto request, CancellationToken cancellationToken = default)
@@ -46,12 +52,41 @@ public class OrderService : IOrderService
             if (client is null) return Result<OrderDto>.Failure("Client not found.");
         }
 
-        Table? table = null;
-        if (request.TableId.HasValue)
+        Reservation? reservation = null;
+        if (request.ReservationId.HasValue)
         {
-            table = await _tableRepository.GetByIdForUpdateAsync(request.TableId.Value, cancellationToken);
+            if (request.ReservationId.Value <= 0) return Result<OrderDto>.Failure("Reservation not found.");
+            reservation = await _reservationRepository.GetByIdForUpdateAsync(request.ReservationId.Value, cancellationToken);
+            if (reservation is null) return Result<OrderDto>.Failure("Reservation not found.");
+            if (reservation.Status == ReservationStatus.Cancelled)
+                return Result<OrderDto>.Failure("A cancelled reservation cannot be received or activated.");
+            if (request.Type != OrderType.Table)
+                return Result<OrderDto>.Failure("A reservation requires a table order.");
+            if (request.TableId.HasValue && reservation.TableId != request.TableId.Value)
+                return Result<OrderDto>.Failure("The order table must match the reservation table.");
+            if (await _orderRepository.GetByReservationIdAsync(request.ReservationId.Value, cancellationToken) is not null)
+                return Result<OrderDto>.Failure("An order already exists for this reservation.");
+        }
+
+        Table? table = null;
+        var now = _clock.GetUtcNow();
+        if ((reservation?.TableId ?? request.TableId) is { } tableId)
+        {
+            table = await _tableRepository.GetByIdForUpdateAsync(tableId, cancellationToken);
             if (table is null) return Result<OrderDto>.Failure("Table not found.");
-            if (table.Status != TableStatus.Available) return Result<OrderDto>.Failure("The selected table is not available.");
+            if (!(table.Status == TableStatus.Available || (reservation is not null && table.Status == TableStatus.Reserved)) ||
+                await _orderRepository.HasActiveOrdersAsync(table.Id, 0, cancellationToken))
+                return Result<OrderDto>.Failure("The selected table is not available.");
+            now = _clock.GetUtcNow();
+            if (reservation is not null)
+            {
+                var arrivalError = ReservationService.ValidateArrivalWindow(reservation.ReservationDateTime, now);
+                if (arrivalError is not null) return Result<OrderDto>.Failure(arrivalError);
+                if (await ReservationService.HasArrivalOverlapAsync(_reservationRepository, reservation, now, cancellationToken))
+                    return Result<OrderDto>.Failure(ReservationService.ArrivalOverlap);
+            }
+            else if (await _reservationRepository.HasReceivedPartyAsync(table.Id, now, cancellationToken))
+                return Result<OrderDto>.Failure("The selected table is not available.");
         }
         else if (request.Type == OrderType.Table)
         {
@@ -60,9 +95,9 @@ public class OrderService : IOrderService
 
         if (request.Items.Count == 0) return Result<OrderDto>.Failure("The order must contain at least one product.");
 
-        var now = DateTimeOffset.UtcNow;
         var order = new Order
         {
+            ReservationId = request.ReservationId, Reservation = reservation,
             TableId = table?.Id, Table = table, UserId = user.Id, User = user, ClientId = client?.Id, Client = client,
             OrderDateTime = now, UpdatedAt = now, Status = OrderStatus.Pending, Origin = request.Origin,
             Type = request.Type, Notes = Normalize(request.Notes), AccountRequested = false, Version = 0
@@ -80,6 +115,12 @@ public class OrderService : IOrderService
         }
 
         RecalculateTotal(order);
+        if (reservation is not null && reservation.Status != ReservationStatus.Completed)
+        {
+            reservation.Status = ReservationStatus.Completed;
+            reservation.UpdatedAt = now;
+            _reservationRepository.Update(reservation);
+        }
         if (table is not null)
         {
             table.Status = TableStatus.Occupied;
@@ -177,7 +218,7 @@ public class OrderService : IOrderService
         {
             var table = await _tableRepository.GetByIdForUpdateAsync(order.TableId.Value, cancellationToken);
             if (table is null) return Result<OrderDto>.Failure("Table not found.");
-            if (!await _orderRepository.HasActiveOrdersAsync(table.Id, order.Id, cancellationToken))
+            if (table.Status == TableStatus.Occupied && !await _orderRepository.HasActiveOrdersAsync(table.Id, order.Id, cancellationToken))
             {
                 table.Status = TableStatus.Available;
                 _tableRepository.Update(table);

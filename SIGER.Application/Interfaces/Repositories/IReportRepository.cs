@@ -7,7 +7,7 @@ public interface IReportRepository
     Task<SalesReportDto> GetSalesReportAsync(
         DateTimeOffset startDate,
         DateTimeOffset endDate,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default, int productLimit = 10);
     Task<IReadOnlyCollection<TopSellingProductDto>> GetTopSellingProductsAsync(
         DateTimeOffset startDate,
         DateTimeOffset endDate,

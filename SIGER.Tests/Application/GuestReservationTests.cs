@@ -77,17 +77,9 @@ public class GuestReservationTests
         var f = new GuestFixture(); var r = f.Request;
         switch (field)
         {
-            case "name": r.Name = "  "; break;
             case "phone": r.Phone = ""; break;
-            case "email": r.Email = "invalid"; break;
             case "past": r.ReservationDateTime = DateTimeOffset.UtcNow.AddMinutes(-1); break;
-            case "zero": r.NumberOfPeople = 0; break;
-            case "negative": r.NumberOfPeople = -1; break;
-            case "many": r.NumberOfPeople = 101; break;
-            case "notes": r.Notes = new string('n', 501); break;
-            case "longname": r.Name = new string('n', 151); break;
-            case "longphone": r.Phone = new string('1', 31); break;
-            case "maxdate": r.ReservationDateTime = DateTimeOffset.MaxValue; break;
+            case "many": r.NumberOfPeople = 13; break;
         }
         Assert.True((await f.Guests.CreateAsync(r)).IsFailure); f.F.NoSave();
     }

@@ -1,4 +1,5 @@
 using SIGER.Application.Base;
+using SIGER.Application.DTOs.Orders;
 using SIGER.Application.DTOs.Reservations;
 using SIGER.Domain.Enums;
 
@@ -11,4 +12,7 @@ public interface IReservationService
     Task<Result<PaginatedResult<ReservationDto>>> GetPagedAsync(int pageNumber, int pageSize, long? userId = null, long? tableId = null, ReservationStatus? status = null, CancellationToken cancellationToken = default);
     Task<Result<ReservationDto>> UpdateAsync(long id, UpdateReservationRequestDto request, CancellationToken cancellationToken = default);
     Task<Result> ChangeStatusAsync(long id, UpdateReservationStatusRequestDto request, CancellationToken cancellationToken = default);
+    Task<Result<OrderDto>> GetReservationOrderAsync(long id, CancellationToken cancellationToken = default);
+    Task<Result<ReservationDto>> ReceiveAsync(long id, long staffUserId, CancellationToken cancellationToken = default);
+    Task<Result<OrderDto>> ActivatePreOrderAsync(long id, long staffUserId, CancellationToken cancellationToken = default);
 }

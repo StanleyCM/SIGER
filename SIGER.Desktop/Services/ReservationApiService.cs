@@ -1,8 +1,13 @@
+using System.Net;
 using SIGER.Application.Base;
+using SIGER.Application.DTOs.Orders;
 using SIGER.Application.DTOs.Reservations;
+using SIGER.Application.Services;
 using SIGER.Domain.Enums;
 
 namespace SIGER.Desktop.Services;
+
+internal sealed record ReservationArrivalStatus(bool CanReceive, bool IsLate, string Label);
 
 internal sealed class ReservationApiService(ApiClient api)
 {
@@ -102,6 +107,76 @@ internal sealed class ReservationApiService(ApiClient api)
             $"api/v1/reservations/{id}/status",
             new UpdateReservationStatusRequestDto { Status = status },
             cancellationToken: cancellationToken);
+    }
+
+    internal async Task<OrderDto?> TryGetPreOrderAsync(long reservationId, CancellationToken cancellationToken = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(reservationId, 0);
+        try
+        {
+            return await api.SendAsync<OrderDto>(
+                HttpMethod.Get,
+                $"api/v1/reservations/{reservationId}/preorder",
+                cancellationToken: cancellationToken);
+        }
+        catch (ApiException error) when (error.StatusCode == HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+    }
+
+    internal Task<ReservationDto> ReceiveAsync(long reservationId, CancellationToken cancellationToken = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(reservationId, 0);
+        return api.SendAsync<ReservationDto>(
+            HttpMethod.Post,
+            $"api/v1/reservations/{reservationId}/receive",
+            cancellationToken: cancellationToken);
+    }
+
+    internal Task<OrderDto> ActivatePreOrderAsync(long reservationId, CancellationToken cancellationToken = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(reservationId, 0);
+        return api.SendAsync<OrderDto>(
+            HttpMethod.Post,
+            $"api/v1/reservations/{reservationId}/activate-preorder",
+            cancellationToken: cancellationToken);
+    }
+
+    internal static ReservationArrivalStatus EvaluateArrivalWindow(DateTimeOffset reservationDateTime, DateTimeOffset now)
+    {
+        var offset = now - reservationDateTime;
+        if (offset < TimeSpan.FromMinutes(-ReservationService.MaxEarlyArrivalMinutes))
+            return new(false, false, "Futura (fuera de ventana de recepción anticipada)");
+        if (offset >= TimeSpan.FromHours(ReservationService.ArrivalDurationHours))
+            return new(false, true, "Vencida (ventana de 2 horas expirada)");
+        if (now > reservationDateTime)
+            return new(true, true, "Llegada tardía (dentro del turno de 2 horas)");
+        return new(true, false, "En horario de recepción");
+    }
+
+    internal static string FormatOperationalState(ReservationDto reservation, OrderDto? linkedOrder)
+    {
+        ArgumentNullException.ThrowIfNull(reservation);
+        return reservation.Status switch
+        {
+            ReservationStatus.Cancelled => "Reserva cancelada",
+            ReservationStatus.Completed when linkedOrder is null =>
+                "Cliente recibido (sin preorden · lista para abrir orden en mesa)",
+            ReservationStatus.Completed when linkedOrder.Status == OrderStatus.Paid =>
+                $"Reserva completada · Orden #{linkedOrder.Id} pagada",
+            ReservationStatus.Completed when linkedOrder.Status == OrderStatus.Cancelled =>
+                $"Cliente recibido · Orden #{linkedOrder.Id} cancelada",
+            ReservationStatus.Completed =>
+                $"Cliente recibido · Orden #{linkedOrder.Id} activa ({OrderApiService.FormatStatus(linkedOrder.Status)})",
+            ReservationStatus.Confirmed when linkedOrder?.Status == OrderStatus.PreOrdered =>
+                $"Reserva confirmada · Preorden Web #{linkedOrder.Id} lista para activar",
+            ReservationStatus.Confirmed =>
+                "Reserva confirmada (pendiente de llegada del cliente)",
+            _ when linkedOrder?.Status == OrderStatus.PreOrdered =>
+                $"Reserva pendiente · Preorden Web #{linkedOrder.Id} lista para activar",
+            _ => "Reserva pendiente (pendiente de llegada del cliente)"
+        };
     }
 
     internal static string FormatStatus(ReservationStatus status) => status switch

@@ -687,7 +687,14 @@ public sealed class DesktopSessionTests
             var path = request.RequestUri!.PathAndQuery;
             return step switch
             {
-                "duplicate" => Task.FromResult(new HttpResponseMessage(HttpStatusCode.Conflict)),
+                "duplicate" => Task.FromResult(new HttpResponseMessage(HttpStatusCode.Conflict)
+                {
+                    Content = JsonContent.Create(new { detail = "A payment already exists for this order." })
+                }),
+                "account-changed" => Task.FromResult(new HttpResponseMessage(HttpStatusCode.Conflict)
+                {
+                    Content = JsonContent.Create(new { detail = "Request the account before paying a table order." })
+                }),
                 "forbidden" => Task.FromResult(new HttpResponseMessage(HttpStatusCode.Forbidden)),
                 "timeout" => throw new OperationCanceledException("simulated timeout"),
                 "reconcile" when request.Method == HttpMethod.Get && path == "/api/v1/payments/order/301" =>
@@ -700,7 +707,7 @@ public sealed class DesktopSessionTests
         });
         fixture.StartSession();
 
-        var payableOrder = new OrderDto { Id = 301, Status = OrderStatus.Served, Total = 45.00m };
+        var payableOrder = new OrderDto { Id = 301, Status = OrderStatus.Served, AccountRequested = true, Total = 45.00m };
         var paidOrder = new OrderDto { Id = 301, Status = OrderStatus.Paid, Total = 45.00m };
         var preOrder = new OrderDto { Id = 302, Status = OrderStatus.PreOrdered, Total = 45.00m };
 
@@ -720,6 +727,12 @@ public sealed class DesktopSessionTests
         var duplicate = await Assert.ThrowsAsync<ApiException>(() =>
             fixture.Payments.ProcessPaymentAsync(301, 45.00m, PaymentMethod.Cash, null, payableOrder));
         Assert.Equal(HttpStatusCode.Conflict, duplicate.StatusCode);
+        Assert.Contains("ya tiene un pago", duplicate.Message);
+        step = "account-changed";
+        var accountError = await Assert.ThrowsAsync<ApiException>(() =>
+            fixture.Payments.ProcessPaymentAsync(301, 45.00m, PaymentMethod.Cash, null, payableOrder));
+        Assert.Equal(HttpStatusCode.Conflict, accountError.StatusCode);
+        Assert.Contains("solicitar la cuenta", accountError.Message);
 
         // 403 Forbidden preserves session
         step = "forbidden";
@@ -966,6 +979,135 @@ public sealed class DesktopSessionTests
             fixture.Promotions.CreateAsync(new CreatePromotionRequestDto { Name = "X", DiscountPercentage = 150m, StartDate = futureStart, EndDate = futureEnd }));
         await Assert.ThrowsAsync<ApiException>(() =>
             fixture.Reports.GetSalesReportAsync(Now, Now.AddDays(-1)));
+    }
+
+    [Fact]
+    public async Task Daily_dashboard_and_report_use_the_same_Dominican_midnights_and_one_sales_request()
+    {
+        var queries = new List<string>();
+        using var fixture = new Fixture((request, _) =>
+        {
+            Assert.Equal("/api/v1/reports/sales", request.RequestUri!.AbsolutePath);
+            queries.Add(Uri.UnescapeDataString(request.RequestUri.Query));
+            return Task.FromResult(JsonStringResponse("""{"totalOrders":1,"totalRevenue":25,"topSellingProducts":[]}"""));
+        });
+        fixture.StartSession();
+        var day = ReportApiService.RestaurantDate(DateTimeOffset.Parse("2026-11-19T02:00:00Z"));
+        Assert.Equal(new DateOnly(2026, 11, 18), day);
+        var (start, end) = ReportApiService.RestaurantDateRange(day, day);
+        var dashboard = await fixture.Reports.GetSalesReportAsync(start, end);
+        var report = await fixture.Reports.GetSalesReportAsync(start, end, limit: 3);
+        Assert.Equal(dashboard.TotalRevenue, report.TotalRevenue);
+        Assert.Equal(new[]
+        {
+            "?startDate=2026-11-18T04:00:00.0000000+00:00&endDate=2026-11-19T04:00:00.0000000+00:00&limit=10",
+            "?startDate=2026-11-18T04:00:00.0000000+00:00&endDate=2026-11-19T04:00:00.0000000+00:00&limit=3"
+        }, queries);
+    }
+
+    [Fact]
+    public async Task Desktop_reservation_reception_preorder_activation_and_network_recovery_workflow()
+    {
+        var reservationWithPreorderStatus = "Pending";
+        var preorderStatus = "PreOrdered";
+        var dropActivationResponse = true;
+
+        using var fixture = new Fixture(async (request, token) =>
+        {
+            var path = request.RequestUri!.PathAndQuery;
+            var method = request.Method;
+
+            // Reservation #80: Web guest reservation WITH preorder #300
+            if (method == HttpMethod.Get && path == "/api/v1/reservations/80")
+                return JsonStringResponse($$"""
+                    {"id":80,"tableId":4,"tableNumber":4,"contactName":"Laura Gómez","contactPhone":"8095550199","reservationDateTime":"{{Now.AddHours(1):O}}","numberOfPeople":2,"status":"{{reservationWithPreorderStatus}}"}
+                    """);
+            if (method == HttpMethod.Get && path == "/api/v1/reservations/80/preorder")
+                return JsonStringResponse($$"""
+                    {"id":300,"reservationId":80,"tableId":4,"tableNumber":4,"userId":{{(preorderStatus == "PreOrdered" ? "null" : "42")}},"status":"{{preorderStatus}}","origin":"Web","type":"Table","total":37.50,"accountRequested":false,"version":1,"details":[{"id":701,"productId":11,"productName":"Risotto","quantity":3,"unitPrice":12.50,"subtotal":37.50,"note":"Al dente"}]}
+                    """);
+            if (method == HttpMethod.Post && path == "/api/v1/reservations/80/activate-preorder")
+            {
+                if (dropActivationResponse)
+                {
+                    dropActivationResponse = false;
+                    reservationWithPreorderStatus = "Completed";
+                    preorderStatus = "Pending";
+                    throw new HttpRequestException("Simulated connection reset after server commit.");
+                }
+                return JsonStringResponse(
+                    """{"title":"Request conflicts with the current state.","status":409,"detail":"The preorder has already been activated."}""",
+                    HttpStatusCode.Conflict);
+            }
+
+            // Reservation #81: Web guest reservation WITHOUT preorder
+            if (method == HttpMethod.Get && path == "/api/v1/reservations/81/preorder")
+                return JsonStringResponse("""{"title":"Resource not found.","status":404,"detail":"Order not found."}""", HttpStatusCode.NotFound);
+            if (method == HttpMethod.Post && path == "/api/v1/reservations/81/receive")
+                return JsonStringResponse($$"""
+                    {"id":81,"tableId":5,"tableNumber":5,"contactName":"Carlos Ruiz","contactPhone":"8095550188","reservationDateTime":"{{Now.AddMinutes(30):O}}","numberOfPeople":4,"status":"Completed"}
+                    """);
+            if (method == HttpMethod.Post && path == "/api/v1/orders")
+            {
+                using var doc = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(token));
+                Assert.Equal(81L, doc.RootElement.GetProperty("reservationId").GetInt64());
+                Assert.Equal(5L, doc.RootElement.GetProperty("tableId").GetInt64());
+                return JsonStringResponse("""
+                    {"id":301,"reservationId":81,"tableId":5,"tableNumber":5,"userId":42,"status":"Pending","origin":"Desktop","type":"Table","total":25.00,"accountRequested":false,"version":1,"details":[{"id":702,"productId":11,"productName":"Sopa","quantity":2,"unitPrice":12.50,"subtotal":25.00,"note":null}]}
+                    """, HttpStatusCode.Created);
+            }
+
+            throw new InvalidOperationException($"Unexpected {method} {path}");
+        });
+        fixture.StartSession();
+
+        // 1. Arrival window evaluation mirrors the server boundaries.
+        Assert.Equal(new(true, false, "En horario de recepción"),
+            ReservationApiService.EvaluateArrivalWindow(Now.AddMinutes(30), Now));
+        Assert.Equal(new(true, true, "Llegada tardía (dentro del turno de 2 horas)"),
+            ReservationApiService.EvaluateArrivalWindow(Now.AddMinutes(-45), Now));
+        Assert.False(ReservationApiService.EvaluateArrivalWindow(Now.AddMinutes(31), Now).CanReceive);
+        Assert.False(ReservationApiService.EvaluateArrivalWindow(Now.AddHours(-2), Now).CanReceive);
+
+        // 2. Staff inspects reservation #80 and its preorder #300 without guest token
+        var res80 = await fixture.Reservations.GetByIdAsync(80);
+        var preorder80 = await fixture.Reservations.TryGetPreOrderAsync(80);
+        Assert.NotNull(preorder80);
+        Assert.Equal(300L, preorder80.Id);
+        Assert.Equal(OrderStatus.PreOrdered, preorder80.Status);
+        Assert.Equal(37.50m, preorder80.Total);
+        Assert.Contains("Preorden Web #300", ReservationApiService.FormatOperationalState(res80, preorder80));
+
+        // 3. Activation experiences a network drop after server commit; Desktop surfaces null StatusCode and reconciles via GET
+        var networkError = await Assert.ThrowsAsync<ApiException>(() => fixture.Reservations.ActivatePreOrderAsync(80));
+        Assert.Null(networkError.StatusCode);
+
+        var reconciledRes80 = await fixture.Reservations.GetByIdAsync(80);
+        var reconciledOrder80 = await fixture.Reservations.TryGetPreOrderAsync(80);
+        Assert.Equal(ReservationStatus.Completed, reconciledRes80.Status);
+        Assert.Equal(OrderStatus.Pending, reconciledOrder80!.Status);
+        Assert.Equal(37.50m, reconciledOrder80.Total);
+        Assert.Contains("Cliente recibido · Orden #300 activa (Pendiente)",
+            ReservationApiService.FormatOperationalState(reconciledRes80, reconciledOrder80));
+
+        // 4. Duplicate activation returns 409 Conflict
+        var conflict = await Assert.ThrowsAsync<ApiException>(() => fixture.Reservations.ActivatePreOrderAsync(80));
+        Assert.Equal(HttpStatusCode.Conflict, conflict.StatusCode);
+
+        // 5. Reservation #81 without preorder: TryGetPreOrderAsync returns null (404), ReceiveAsync marks Completed, and waiter creates linked order
+        Assert.Null(await fixture.Reservations.TryGetPreOrderAsync(81));
+        var received81 = await fixture.Reservations.ReceiveAsync(81);
+        Assert.Equal(ReservationStatus.Completed, received81.Status);
+        Assert.Contains("sin preorden", ReservationApiService.FormatOperationalState(received81, null));
+
+        var linkedOrder81 = await fixture.Orders.CreateTableOrderAsync(
+            5,
+            [new CreateOrderDetailRequestDto { ProductId = 11, Quantity = 2 }],
+            notes: null,
+            reservationId: 81);
+        Assert.Equal(301L, linkedOrder81.Id);
+        Assert.Equal(81L, linkedOrder81.ReservationId);
+        Assert.Equal(OrderStatus.Pending, linkedOrder81.Status);
     }
 
     private static HttpResponseMessage JsonStringResponse(string json, HttpStatusCode status = HttpStatusCode.OK) =>

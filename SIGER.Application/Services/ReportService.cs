@@ -14,10 +14,11 @@ public class ReportService : IReportService
         _reportRepository = reportRepository;
     }
 
-    public async Task<Result<SalesReportDto>> GetSalesReportAsync(DateTimeOffset startDate, DateTimeOffset endDate, CancellationToken cancellationToken = default)
+    public async Task<Result<SalesReportDto>> GetSalesReportAsync(DateTimeOffset startDate, DateTimeOffset endDate, CancellationToken cancellationToken = default, int productLimit = 10)
     {
         if (endDate < startDate) return Result<SalesReportDto>.Failure("End date cannot be earlier than start date.");
-        var report = await _reportRepository.GetSalesReportAsync(startDate, endDate, cancellationToken);
+        if (productLimit is < 1 or > 200) return Result<SalesReportDto>.Failure("Limit must be between 1 and 200.");
+        var report = await _reportRepository.GetSalesReportAsync(startDate, endDate, cancellationToken, productLimit);
         return Result<SalesReportDto>.Success(report);
     }
 

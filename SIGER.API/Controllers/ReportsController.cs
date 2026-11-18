@@ -14,11 +14,13 @@ namespace SIGER.API.Controllers;
 [Authorize(Policy = ApiPolicies.AdministratorOnly)]
 public sealed class ReportsController(IReportService service) : ControllerBase
 {
+    // Both report routes use an inclusive start and an exclusive end.
     [HttpGet("sales")]
     [ProducesResponseType(typeof(SalesReportDto), 200)]
     public async Task<IActionResult> GetSales([Microsoft.AspNetCore.Mvc.ModelBinding.BindRequired] DateTimeOffset startDate,
-        [Microsoft.AspNetCore.Mvc.ModelBinding.BindRequired] DateTimeOffset endDate, CancellationToken cancellationToken) =>
-        (await service.GetSalesReportAsync(startDate.ToUniversalTime(), endDate.ToUniversalTime(), cancellationToken)).ToHttp(this);
+        [Microsoft.AspNetCore.Mvc.ModelBinding.BindRequired] DateTimeOffset endDate,
+        [Range(1, 200)] int limit = 10, CancellationToken cancellationToken = default) =>
+        (await service.GetSalesReportAsync(startDate.ToUniversalTime(), endDate.ToUniversalTime(), cancellationToken, limit)).ToHttp(this);
 
     [HttpGet("top-products")]
     [ProducesResponseType(typeof(IReadOnlyCollection<TopSellingProductDto>), 200)]

@@ -3,11 +3,13 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using SIGER.Application.DTOs.Orders;
+using SIGER.Application.DTOs.Payments;
 using SIGER.Application.DTOs.Reservations;
 using SIGER.Application.Interfaces.Repositories;
 using SIGER.Application.Interfaces.Services;
 using SIGER.Application.Services;
 using SIGER.Domain.Enums;
+using SIGER.Domain.Exceptions;
 using SIGER.Infrastructure.DependencyInjection;
 using SIGER.Infrastructure.Persistence;
 using SIGER.Tests.Application;
@@ -30,9 +32,15 @@ public sealed class GuestPreOrderPostgresTests : IAsyncLifetime
     private string connection = "";
     private readonly string database = "siger_test_" + Guid.NewGuid().ToString("N");
     private ServiceProvider? provider;
+    private readonly TestClock clock = new();
     private bool created;
     private static string Root => FindRoot();
     private static string Script => File.ReadAllText(Path.Combine(Root, "scripts/database/003_guest_reservations_preorders.sql"));
+    private sealed class TestClock : TimeProvider
+    {
+        public DateTimeOffset? Now { get; set; }
+        public override DateTimeOffset GetUtcNow() => Now ?? DateTimeOffset.UtcNow;
+    }
     private static string FindRoot()
     {
         for (var d = new DirectoryInfo(AppContext.BaseDirectory); d is not null; d = d.Parent)
@@ -64,6 +72,10 @@ public sealed class GuestPreOrderPostgresTests : IAsyncLifetime
         services.AddScoped<IPreOrderService, PreOrderService>();
         services.AddScoped<IReservationService, ReservationService>();
         services.AddScoped<IPublicCatalogService, PublicCatalogService>();
+        services.AddScoped<IOrderService, OrderService>();
+        services.AddScoped<IPaymentService, PaymentService>();
+        services.AddScoped<IKitchenService, KitchenService>();
+        services.AddSingleton<TimeProvider>(clock);
         provider = services.BuildServiceProvider();
     }
 
@@ -172,7 +184,9 @@ public sealed class GuestPreOrderPostgresTests : IAsyncLifetime
             "UPDATE reserva SET token_acceso_expira=NULL WHERE id_usuario IS NULL",
             "UPDATE reserva SET token_acceso_hash=NULL,token_acceso_expira=NULL WHERE id_usuario IS NULL"
         }) Assert.Equal("23514", (await Assert.ThrowsAsync<PostgresException>(() => Sql(sql))).SqlState);
-        Assert.Equal("23503", (await Assert.ThrowsAsync<PostgresException>(() => Sql("DELETE FROM reserva WHERE id_usuario IS NULL"))).SqlState);
+        var restrictedDelete = await Assert.ThrowsAsync<PostgresException>(() => Sql("DELETE FROM reserva WHERE id_usuario IS NULL"));
+        Assert.Contains(restrictedDelete.SqlState, new[] { "23503", "23001" });
+        Assert.Equal("fk_orden_reserva", restrictedDelete.ConstraintName);
     }
 
     [LocalPostgresFact]
@@ -221,8 +235,8 @@ public sealed class GuestPreOrderPostgresTests : IAsyncLifetime
         {
             await Sql($"UPDATE reserva SET estado='{status}' WHERE id_usuario IS NULL");
             var slots = await Read(date);
-            Assert.Equal(status is "Cancelada" or "Completada", slots.Single(s => s.Time == "12:00").Available);
-            Assert.Equal(status is "Cancelada" or "Completada", slots.Single(s => s.Time == "13:30").Available);
+            Assert.Equal(status == "Cancelada", slots.Single(s => s.Time == "12:00").Available);
+            Assert.Equal(status == "Cancelada", slots.Single(s => s.Time == "13:30").Available);
             Assert.True(slots.Single(s => s.Time == "14:00").Available);
         }
         await Sql("UPDATE reserva SET estado='Pendiente' WHERE id_usuario IS NULL");
@@ -236,6 +250,200 @@ public sealed class GuestPreOrderPostgresTests : IAsyncLifetime
         using (var scope = Scope()) Assert.True((await scope.ServiceProvider.GetRequiredService<IGuestReservationService>().CreateAsync(Request(start.AddHours(6)))).IsFailure);
         await Sql("UPDATE mesa SET estado='FueraServicio' WHERE id_mesa=1");
         Assert.All(await Read(date.AddDays(1)), s => Assert.False(s.Available));
+    }
+
+    [LocalPostgresFact]
+    public async Task Concurrent_staff_preorder_activations_have_one_winner_satisfy_checks_and_enter_kitchen()
+    {
+        var r = await Reserve();
+        using (var s = Scope())
+            Assert.True((await s.ServiceProvider.GetRequiredService<IPreOrderService>().CreateAsync(r.Reservation.Id, r.AccessToken, Items)).IsSuccess);
+        clock.Now = r.Reservation.ReservationDateTime;
+
+        var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tasks = Enumerable.Range(0, 8).Select(async _ =>
+        {
+            using var scope = Scope(); await start.Task;
+            return await scope.ServiceProvider.GetRequiredService<IReservationService>().ActivatePreOrderAsync(r.Reservation.Id, 1);
+        }).ToArray();
+        start.SetResult();
+        var results = await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromSeconds(30));
+
+        var winner = Assert.Single(results, x => x.IsSuccess).Value!;
+        Assert.Equal(7, results.Count(x => x.IsFailure));
+        Assert.Equal(OrderStatus.Pending, winner.Status);
+        Assert.Equal(1L, winner.UserId);
+        Assert.Equal(25m, winner.Total);
+        Assert.Equal("Completada", await Sql($"SELECT estado::text FROM reserva WHERE id_reserva={r.Reservation.Id}"));
+        Assert.Equal("Ocupada", await Sql("SELECT estado::text FROM mesa WHERE id_mesa=1"));
+        Assert.Equal("Pendiente", await Sql($"SELECT estado::text FROM orden WHERE id_reserva={r.Reservation.Id}"));
+        using var read = Scope();
+        Assert.Single(await read.ServiceProvider.GetRequiredService<IOrderRepository>().GetKitchenOrdersAsync());
+    }
+
+    [LocalPostgresFact]
+    public async Task Early_reception_cannot_displace_previous_booking_and_received_party_keeps_its_slot()
+    {
+        var start = GuestFixture.NoonInSantoDomingo(1);
+        var earlier = await Reserve(start);
+        var next = await Reserve(start.AddHours(2));
+        clock.Now = start.AddHours(2).AddMinutes(-30);
+        using (var scope = Scope())
+        {
+            var service = scope.ServiceProvider.GetRequiredService<IReservationService>();
+            Assert.Equal("The table already has an overlapping reservation.", (await service.ReceiveAsync(next.Reservation.Id, 1)).Error);
+            Assert.True((await service.ChangeStatusAsync(earlier.Reservation.Id, new() { Status = ReservationStatus.Cancelled })).IsSuccess);
+        }
+        using (var scope = Scope())
+        {
+            var service = scope.ServiceProvider.GetRequiredService<IReservationService>();
+            Assert.True((await service.ReceiveAsync(next.Reservation.Id, 1)).IsSuccess);
+        }
+        using (var scope = Scope())
+        {
+            var repository = scope.ServiceProvider.GetRequiredService<IReservationRepository>();
+            Assert.True(await repository.HasOverlapAsync(1, start.AddMinutes(90), start.AddHours(2)));
+            Assert.True(await repository.HasOverlapAsync(1, start.AddHours(2), start.AddHours(4)));
+            Assert.False(await repository.HasOverlapAsync(1, start.AddHours(4), start.AddHours(6)));
+        }
+        using (var scope = Scope())
+        {
+            var orders = scope.ServiceProvider.GetRequiredService<IOrderService>();
+            var tables = scope.ServiceProvider.GetRequiredService<ITableRepository>();
+            Assert.Empty(await tables.GetAvailableAsync());
+            Assert.Equal("The selected table is not available.", (await orders.CreateOrderAsync(TableOrder())).Error);
+        }
+
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var linked = Enumerable.Range(0, 2).Select(async _ =>
+        {
+            using var scope = Scope(); await gate.Task;
+            return await scope.ServiceProvider.GetRequiredService<IOrderService>().CreateOrderAsync(TableOrder(next.Reservation.Id));
+        }).ToArray();
+        gate.SetResult();
+        var results = await Task.WhenAll(linked).WaitAsync(TimeSpan.FromSeconds(20));
+        Assert.Single(results, r => r.IsSuccess);
+        Assert.Single(results, r => r.Error == "An order already exists for this reservation.");
+        Assert.Equal("Ocupada", await Sql("SELECT estado::text FROM mesa WHERE id_mesa=1"));
+    }
+
+    [LocalPostgresFact]
+    public async Task Early_payment_is_rejected_while_cancellation_and_kitchen_compete()
+    {
+        long id;
+        long version;
+        using (var scope = Scope())
+        {
+            var result = await scope.ServiceProvider.GetRequiredService<IOrderService>().CreateOrderAsync(TableOrder());
+            Assert.True(result.IsSuccess, result.Error);
+            id = result.Value!.Id;
+            version = result.Value.Version;
+        }
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        async Task<bool> Run(Func<IServiceProvider, Task<bool>> action)
+        {
+            using var scope = Scope();
+            await gate.Task;
+            try { return await action(scope.ServiceProvider); }
+            catch (Exception e) when (e is DbUpdateConcurrencyException or BusinessRuleException) { return false; }
+        }
+        var payment = Run(async services => (await services.GetRequiredService<IPaymentService>().ProcessPaymentAsync(
+            new ProcessPaymentRequestDto { OrderId = id, UserId = 1, Amount = 12.50m, Method = PaymentMethod.Cash })).IsSuccess);
+        var cancel = Run(async services => (await services.GetRequiredService<IOrderService>().UpdateStatusAsync(
+            id, new() { Status = OrderStatus.Cancelled, Version = version })).IsSuccess);
+        var kitchen = Run(async services => (await services.GetRequiredService<IKitchenService>().MarkInPreparationAsync(id)).IsSuccess);
+        gate.SetResult();
+        await Task.WhenAll(payment, cancel, kitchen).WaitAsync(TimeSpan.FromSeconds(20));
+
+        var status = await Sql($"SELECT estado::text FROM orden WHERE id_orden={id}");
+        var payments = await Sql($"SELECT count(*) FROM pago WHERE id_orden={id}");
+        Assert.False(await payment);
+        Assert.NotEqual(await cancel, await kitchen);
+        Assert.Equal(await cancel ? "Cancelada" : "EnPreparacion", status);
+        Assert.Equal(0L, payments);
+        Assert.Equal(await cancel ? "Disponible" : "Ocupada", await Sql("SELECT estado::text FROM mesa WHERE id_mesa=1"));
+    }
+
+    private static CreateOrderRequestDto TableOrder(long? reservationId = null) => new()
+    {
+        UserId = 1, TableId = 1, ReservationId = reservationId, Origin = OrderOrigin.Desktop,
+        Type = OrderType.Table, Items = [new() { ProductId = 1, Quantity = 1 }]
+    };
+
+    [LocalPostgresFact]
+    public async Task Concurrent_payments_record_one_sale_and_release_table_once()
+    {
+        long id;
+        using (var scope = Scope())
+        {
+            var orders = scope.ServiceProvider.GetRequiredService<IOrderService>();
+            var order = await orders.CreateOrderAsync(TableOrder());
+            Assert.True(order.IsSuccess, order.Error);
+            id = order.Value!.Id;
+        }
+        await Sql($"UPDATE orden SET estado='Servida', cuenta_solicitada=true WHERE id_orden={id}");
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var contenders = Enumerable.Range(0, 4).Select(async _ =>
+        {
+            using var scope = Scope();
+            await gate.Task;
+            try
+            {
+                return (await scope.ServiceProvider.GetRequiredService<IPaymentService>().ProcessPaymentAsync(
+                    new() { OrderId = id, UserId = 1, Amount = 12.50m, Method = PaymentMethod.Cash })).IsSuccess;
+            }
+            catch (DbUpdateConcurrencyException) { return false; }
+            catch (DbUpdateException error) when (error.InnerException is PostgresException { SqlState: "23505" }) { return false; }
+        }).ToArray();
+        gate.SetResult();
+        Assert.Single(await Task.WhenAll(contenders).WaitAsync(TimeSpan.FromSeconds(20)), succeeded => succeeded);
+        Assert.Equal(1L, await Sql($"SELECT count(*) FROM pago WHERE id_orden={id} AND estado='Completado'"));
+        Assert.Equal("Pagada", await Sql($"SELECT estado::text FROM orden WHERE id_orden={id}"));
+        Assert.Equal("Disponible", await Sql("SELECT estado::text FROM mesa WHERE id_mesa=1"));
+    }
+
+    [LocalPostgresFact]
+    public async Task Sales_use_completed_payment_date_and_half_open_local_days_without_duplicating_revenue()
+    {
+        await Sql("""
+            INSERT INTO orden(id_orden,id_usuario,id_mesa,estado,fecha_hora,total) VALUES
+                (101,1,1,'Pagada','2026-11-17 20:00-04',30),
+                (102,1,1,'Pagada','2026-11-18 10:00-04',12.50),
+                (103,1,1,'Pagada','2026-11-18 10:00-04',90),
+                (104,1,1,'Pagada','2026-11-18 10:00-04',80),
+                (105,1,1,'Pagada','2026-11-18 10:00-04',70),
+                (106,1,1,'Pagada','2026-11-18 10:00-04',60);
+            INSERT INTO detalle_orden(id_orden,id_producto,cantidad,precio_unitario,subtotal) VALUES
+                (101,1,2,12.50,25), (101,2,1,5,5), (102,1,1,12.50,12.50),
+                (103,1,9,10,90), (104,1,8,10,80), (105,1,7,10,70), (106,1,6,10,60);
+            INSERT INTO pago(id_orden,id_usuario,monto,metodo,estado,fecha_pago) VALUES
+                (101,1,30,'Efectivo','Completado','2026-11-18 00:00-04'),
+                (102,1,12.50,'Efectivo','Completado','2026-11-19 00:00-04'),
+                (103,1,90,'Efectivo','Fallido','2026-11-18 09:00-04'),
+                (104,1,80,'Efectivo','Pendiente','2026-11-18 09:00-04'),
+                (105,1,70,'Efectivo','Reembolsado','2026-11-18 09:00-04');
+            """);
+        var today = DateTimeOffset.Parse("2026-11-18T04:00:00Z");
+        using var scope = Scope();
+        var reports = scope.ServiceProvider.GetRequiredService<IReportRepository>();
+        var sales = await reports.GetSalesReportAsync(today, today.AddDays(1));
+        Assert.Equal(1, sales.TotalOrders);
+        Assert.Equal(30m, sales.TotalRevenue);
+        Assert.Collection(sales.TopSellingProducts,
+            first => { Assert.Equal(1, first.ProductId); Assert.Equal(2, first.QuantitySold); Assert.Equal(25m, first.Revenue); },
+            second => { Assert.Equal(2, second.ProductId); Assert.Equal(5m, second.Revenue); });
+        var top = await reports.GetTopSellingProductsAsync(today, today.AddDays(1), 1);
+        Assert.Equal(1, Assert.Single(top).ProductId);
+        var limited = await reports.GetSalesReportAsync(today, today.AddDays(1), productLimit: 1);
+        Assert.Equal(30m, limited.TotalRevenue);
+        Assert.Single(limited.TopSellingProducts);
+        var tomorrow = await reports.GetSalesReportAsync(today.AddDays(1), today.AddDays(2));
+        Assert.Equal(1, tomorrow.TotalOrders);
+        Assert.Equal(12.50m, tomorrow.TotalRevenue);
+        var yesterday = await reports.GetSalesReportAsync(today.AddDays(-1), today);
+        Assert.Equal(0, yesterday.TotalOrders);
+        Assert.Equal(0m, yesterday.TotalRevenue);
+        Assert.Empty(yesterday.TopSellingProducts);
     }
 
     public async Task DisposeAsync()

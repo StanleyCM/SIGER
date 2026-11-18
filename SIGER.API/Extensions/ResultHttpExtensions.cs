@@ -16,6 +16,8 @@ public static class ResultHttpExtensions
     ];
     private static readonly HashSet<string> ConflictErrors =
     [
+        SIGER.Application.Services.PaymentService.TableOrderNotServed,
+        SIGER.Application.Services.PaymentService.AccountNotRequested,
         "Only future pending reservations can be edited.", "A reservation with an operational order cannot be rescheduled.",
         "A preorder is not operational.", "A preorder already exists for this reservation.", "No table is available for this reservation.",
         "A user with this email already exists.", "The order is already paid.",
@@ -28,7 +30,22 @@ public static class ResultHttpExtensions
         "Only ready orders can be served.",
         "Kitchen transitions must advance from pending to preparation to ready.",
         "The table already has an overlapping reservation.",
-        "A table with active orders cannot change status."
+        "A table with active orders cannot change status.",
+        "Cancelled or completed reservations cannot be modified.",
+        "A reservation with an operational order cannot be cancelled or reopened.",
+        "A completed reservation cannot change status.",
+        "A cancelled reservation cannot change status.",
+        "Use the preorder activation workflow to receive a reservation with a preorder.",
+        "A cancelled reservation cannot be received or activated.",
+        "The reservation has already been received.",
+        "The preorder has already been activated.",
+        "The reservation cannot be received more than 30 minutes in advance.",
+        "Use the reception workflow to complete a reservation.",
+        "A reservation with a cancelled order cannot be received.",
+        "The reservation arrival window has expired.",
+        "Table is out of service.",
+        "An order already exists for this reservation.",
+        "The order table must match the reservation table."
     ];
 
     public static IActionResult ToHttp<T>(this Result<T> result, ControllerBase controller,

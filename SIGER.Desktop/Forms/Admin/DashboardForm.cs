@@ -78,9 +78,8 @@ internal sealed class DashboardForm : UserControl
 
         try
         {
-            var localToday = DateTime.Now.Date;
-            var todayStart = new DateTimeOffset(localToday, TimeZoneInfo.Local.GetUtcOffset(localToday));
-            var todayEnd = new DateTimeOffset(localToday.AddDays(1).AddTicks(-1), TimeZoneInfo.Local.GetUtcOffset(localToday));
+            var localToday = ReportApiService.RestaurantDate(DateTimeOffset.UtcNow);
+            var (todayStart, todayEnd) = ReportApiService.RestaurantDateRange(localToday, localToday);
 
             var tablesPageTask = tables.GetPagedAsync(1, 200, cts.Token);
             var availableTablesTask = tables.GetAvailableAsync(cts.Token);
@@ -123,7 +122,7 @@ internal sealed class DashboardForm : UserControl
 
             var salesToday = salesTodayTask.Result;
             salesTodaySummaryLabel.Text =
-                $"Ventas del día ({localToday:d}, por fecha de orden pagada): {salesToday.TotalOrders} órdenes pagadas   |   Ingresos: {salesToday.TotalRevenue:C2}";
+                $"Ventas del día ({localToday:d}, Santo Domingo): {salesToday.TotalOrders} pagos completados   |   Ingresos: {salesToday.TotalRevenue:C2}";
 
             var nowUtc = DateTimeOffset.UtcNow;
             var upcoming = pendingRes.Items.Concat(confirmedRes.Items)

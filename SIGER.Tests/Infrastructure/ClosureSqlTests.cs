@@ -20,7 +20,8 @@ public class ClosureSqlTests
         Assert.False(await new ReservationRepository(f.Context).HasOverlapAsync(4, start, start.AddHours(2), 8));
         var sql = Assert.Single(f.Capture.Sql);
         Assert.Contains("EXISTS", sql); Assert.Contains("Pendiente", sql); Assert.Contains("Confirmada", sql);
-        Assert.DoesNotContain("Cancelada", sql); Assert.DoesNotContain("Completada", sql);
+        Assert.DoesNotContain("Cancelada", sql); Assert.Contains("Completada", sql);
+        Assert.Contains("r.fecha_actualizacion <", sql);
         Assert.Contains("r.id_reserva <>", sql); Assert.Contains("r.fecha_hora <", sql);
         Assert.Contains("INTERVAL '2 hours'", sql); Assert.Contains(" > ", sql);
     }

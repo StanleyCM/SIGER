@@ -183,6 +183,7 @@ internal sealed class TablesForm : UserControl
                     return;
                 }
                 catch (ApiException) { }
+                catch (OperationCanceledException) when (cts.IsCancellationRequested) { return; }
             }
             ShowFeedback(error.Message, isError: true);
         }
@@ -244,6 +245,7 @@ internal sealed class TablesForm : UserControl
                     return;
                 }
                 catch (ApiException) { }
+                catch (OperationCanceledException) when (cts.IsCancellationRequested) { return; }
             }
             ShowFeedback(error.Message, isError: true);
         }

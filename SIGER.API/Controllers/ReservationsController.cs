@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 using SIGER.API.Authorization.Policies;
 using SIGER.API.Extensions;
 using SIGER.Application.Base;
+using SIGER.Application.DTOs.Orders;
 using SIGER.Application.DTOs.Reservations;
 using SIGER.Application.Interfaces.Services;
 
@@ -33,6 +34,24 @@ public sealed class ReservationsController(IReservationService service) : Contro
         if (result.IsSuccess && !CanAccess(result.Value!)) return Forbid();
         return result.ToHttp(this);
     }
+
+    [HttpGet("{id:long}/preorder")]
+    [Authorize(Policy = ApiPolicies.WaiterOrAdministrator)]
+    [ProducesResponseType(typeof(OrderDto), 200)]
+    public async Task<IActionResult> GetPreOrder(long id, CancellationToken cancellationToken) =>
+        (await service.GetReservationOrderAsync(id, cancellationToken)).ToHttp(this);
+
+    [HttpPost("{id:long}/receive")]
+    [Authorize(Policy = ApiPolicies.WaiterOrAdministrator)]
+    [ProducesResponseType(typeof(ReservationDto), 200)]
+    public async Task<IActionResult> Receive(long id, CancellationToken cancellationToken) =>
+        (await service.ReceiveAsync(id, User.GetLocalUserId(), cancellationToken)).ToHttp(this);
+
+    [HttpPost("{id:long}/activate-preorder")]
+    [Authorize(Policy = ApiPolicies.WaiterOrAdministrator)]
+    [ProducesResponseType(typeof(OrderDto), 200)]
+    public async Task<IActionResult> ActivatePreOrder(long id, CancellationToken cancellationToken) =>
+        (await service.ActivatePreOrderAsync(id, User.GetLocalUserId(), cancellationToken)).ToHttp(this);
 
     [HttpPost]
     [ProducesResponseType(typeof(ReservationDto), 201)]

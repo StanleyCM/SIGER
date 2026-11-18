@@ -82,6 +82,8 @@ internal sealed class OrdersForm : UserControl
     private IReadOnlyList<OrderDto> currentOrders = [];
     private OrderDto? selectedOrder;
     private OrderDetailDto? selectedDetail;
+    private long? draftReservationId;
+    private long? draftReservationTableId;
     private long? uncertainSubmissionTableId;
     private int currentPage = 1;
     private int totalPages = 1;
@@ -138,9 +140,34 @@ internal sealed class OrdersForm : UserControl
 
     internal async Task PrepareNewOrderForTableAsync(TableDto table)
     {
+        draftReservationId = null;
+        draftReservationTableId = null;
         await LoadWorkspaceAsync(preferredAvailableTableId: table.Id, filterTableId: table.Id, selectOrderId: null);
+        RefreshDraftView();
         ShowFeedback($"Mesa #{table.Number:00} seleccionada para nueva orden. Agrega productos al borrador y envíala al servidor.", isError: false);
         newOrderProductCombo.Focus();
+    }
+
+    internal async Task PrepareNewOrderForReservationAsync(long reservationId, long tableId, int? tableNumber)
+    {
+        draftReservationId = reservationId;
+        draftReservationTableId = tableId;
+        await LoadWorkspaceAsync(preferredAvailableTableId: tableId, filterTableId: tableId, selectOrderId: null);
+        RefreshDraftView();
+        var tableText = tableNumber.HasValue ? $"Mesa #{tableNumber.Value:00}" : $"Mesa #{tableId}";
+        if (IsDisposed) return;
+        if (newOrderTableCombo.SelectedItem is TableComboItem { Table.Id: var selectedId } && selectedId == tableId)
+            ShowFeedback($"Reservación #{reservationId} recibida en {tableText}. Agrega productos al borrador para abrir su orden operativa.", isError: false);
+        newOrderProductCombo.Focus();
+    }
+
+    internal async Task OpenOrderAsync(long orderId, long? tableId = null)
+    {
+        if (orderId <= 0) return;
+        orderIdFilter.Value = Math.Clamp(orderId, (long)orderIdFilter.Minimum, (long)orderIdFilter.Maximum);
+        await LoadWorkspaceAsync(preferredAvailableTableId: null, filterTableId: tableId, selectOrderId: orderId);
+        if (!IsDisposed && selectedOrder?.Id == orderId)
+            ShowFeedback($"Mostrando Orden #{orderId}.", isError: false);
     }
 
     internal async Task FilterByTableAsync(TableDto table)
@@ -254,7 +281,7 @@ internal sealed class OrdersForm : UserControl
     private async Task LoadCatalogAndTablesCoreAsync(long? preferredAvailableTableId, long? filterTableId, CancellationToken token)
     {
         var allTablesTask = tables.GetPagedAsync(1, 200, token);
-        var availableTablesTask = tables.GetAvailableAsync(token);
+        var availableTablesTask = LoadDraftTablesAsync(token);
         var availableProductsTask = products.GetAvailableAsync(null, token);
         await Task.WhenAll(allTablesTask, availableTablesTask, availableProductsTask);
 
@@ -267,6 +294,15 @@ internal sealed class OrdersForm : UserControl
         BindAvailableTables(preferredAvailableTableId);
         BindTableFilter(filterTableId);
         BindProductCombos();
+    }
+
+    private async Task<IReadOnlyCollection<TableDto>> LoadDraftTablesAsync(CancellationToken token)
+    {
+        if (draftReservationTableId is not { } receivedTableId)
+            return await tables.GetAvailableAsync(token);
+
+        var table = await tables.GetByIdAsync(receivedTableId, token);
+        return table.Status is TableStatus.Available or TableStatus.Reserved ? [table] : [];
     }
 
     private async Task LoadOrdersPageAsync(int pageNumber, long? preferredOrderId)
@@ -394,6 +430,8 @@ internal sealed class OrdersForm : UserControl
     {
         draftItems.Clear();
         newOrderNotes.Clear();
+        draftReservationId = null;
+        draftReservationTableId = null;
         uncertainSubmissionTableId = null;
         RefreshDraftView();
     }
@@ -424,6 +462,7 @@ internal sealed class OrdersForm : UserControl
         pendingOperation = cts;
         SetBusy(true);
         ShowFeedback("", isError: false);
+        OrderDto? confirmedOrder = null;
 
         try
         {
@@ -434,11 +473,14 @@ internal sealed class OrdersForm : UserControl
                 Note = line.Note
             }).ToArray();
 
-            var created = await orders.CreateTableOrderAsync(table.Id, items, newOrderNotes.Text, cts.Token);
+            var created = await orders.CreateTableOrderAsync(table.Id, items, newOrderNotes.Text, draftReservationId, cts.Token);
+            confirmedOrder = created;
             if (cts.IsCancellationRequested || IsDisposed) return;
 
             draftItems.Clear();
             newOrderNotes.Clear();
+            draftReservationId = null;
+            draftReservationTableId = null;
             uncertainSubmissionTableId = null;
             RefreshDraftView();
 
@@ -454,7 +496,12 @@ internal sealed class OrdersForm : UserControl
         catch (ApiException error)
         {
             if (cts.IsCancellationRequested || IsDisposed) return;
-            if (error.StatusCode is null)
+            if (confirmedOrder is not null)
+            {
+                ShowFeedback($"Orden #{confirmedOrder.Id} creada. No se pudo actualizar la vista: {error.Message}", isError: true);
+                return;
+            }
+            if (error.StatusCode is null || (int)error.StatusCode.Value >= 500)
             {
                 // Transport or timeout error after sending POST /orders: keep draft and require consulting before retry.
                 uncertainSubmissionTableId = table.Id;
@@ -468,6 +515,7 @@ internal sealed class OrdersForm : UserControl
                 {
                     try { await LoadCatalogAndTablesCoreAsync(null, (tableFilterCombo.SelectedItem as TableFilterItem)?.TableId, cts.Token); }
                     catch (ApiException) { /* Best-effort refresh on conflict */ }
+                    catch (OperationCanceledException) when (cts.IsCancellationRequested) { return; }
                 }
                 ShowFeedback(error.Message, isError: true);
             }
@@ -661,7 +709,7 @@ internal sealed class OrdersForm : UserControl
         {
             if (cts.IsCancellationRequested || IsDisposed) return;
 
-            if (error.StatusCode == HttpStatusCode.Conflict || error.StatusCode is null)
+            if (error.StatusCode == HttpStatusCode.Conflict || error.StatusCode is null || (int)error.StatusCode.Value >= 500)
             {
                 try
                 {
@@ -679,6 +727,7 @@ internal sealed class OrdersForm : UserControl
                 {
                     // Keep original error message if reload also fails.
                 }
+                catch (OperationCanceledException) when (cts.IsCancellationRequested) { return; }
             }
 
             ShowFeedback(error.Message, isError: true);
@@ -1041,7 +1090,8 @@ internal sealed class OrdersForm : UserControl
             draftGrid.Rows[rowIndex].Tag = line;
         }
 
-        draftTotalLabel.Text = $"Total estimado borrador: {estimatedTotal:C2} (el servidor calcula el importe final)";
+        var reservationNote = draftReservationId.HasValue ? $" · Vinculada a Reserva #{draftReservationId.Value}" : "";
+        draftTotalLabel.Text = $"Total estimado borrador: {estimatedTotal:C2}{reservationNote} (el servidor calcula el importe final)";
         UpdateDraftActionStates();
     }
 
@@ -1205,8 +1255,9 @@ internal sealed class OrdersForm : UserControl
             ? $"Mesa #{order.TableNumber.Value:00} (ID #{order.TableId})"
             : order.TableId.HasValue ? $"Mesa #{order.TableId.Value}" : "Para llevar";
         selectedOrderTitle.Text = $"Orden #{order.Id} · {tableText}";
+        var reservationMeta = order.ReservationId.HasValue ? $"   |   Reserva: #{order.ReservationId.Value}" : "";
         selectedOrderMeta.Text =
-            $"Estado: {OrderApiService.FormatStatus(order.Status)}   |   " +
+            $"Estado: {OrderApiService.FormatStatus(order.Status)}{reservationMeta}   |   " +
             $"Cuenta: {(order.AccountRequested ? "Solicitada" : "No solicitada")}   |   " +
             $"Total servidor: {order.Total:C2}   |   " +
             $"Versión: {order.Version}";

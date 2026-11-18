@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Net;
 using System.Windows.Forms.Automation;
+using SIGER.Application.DTOs.Orders;
 using SIGER.Application.DTOs.Reservations;
 using SIGER.Application.DTOs.Tables;
 using SIGER.Desktop.Controls;
@@ -8,6 +9,8 @@ using SIGER.Desktop.Services;
 using SIGER.Domain.Enums;
 
 namespace SIGER.Desktop.Forms.Admin;
+
+internal sealed record ReservationOrdersNavigationArgs(ReservationDto Reservation, OrderDto? LinkedOrder);
 
 internal sealed class ReservationsForm : UserControl
 {
@@ -46,16 +49,30 @@ internal sealed class ReservationsForm : UserControl
     private readonly ComboBox statusActionCombo = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 175 };
     private readonly Button changeStatusButton = DesktopTheme.Button("Cambiar &estado", DesktopTheme.Sidebar, DesktopTheme.Cream, DesktopTheme.SidebarHover);
 
+    // Reception & PreOrder controls
+    private readonly Label receptionStateLabel = DesktopTheme.Label("Selecciona una reservación para gestionar su recepción.", DesktopTheme.Strong, DesktopTheme.Ink);
+    private readonly Label arrivalWindowLabel = DesktopTheme.Label("", DesktopTheme.Small, DesktopTheme.Muted);
+    private readonly Label preorderSummaryLabel = DesktopTheme.Label("", DesktopTheme.Small, DesktopTheme.Ink);
+    private readonly DataGridView preorderItemsGrid = new();
+    private readonly Button receiveAndActivateButton = DesktopTheme.Button("&Recibir y activar preorden", DesktopTheme.Olive, DesktopTheme.Ink, DesktopTheme.SoftOlive);
+    private readonly Button receiveWithoutPreOrderButton = DesktopTheme.Button("Recibir cliente (&sin preorden)", DesktopTheme.SoftOlive, DesktopTheme.Ink, DesktopTheme.Olive);
+    private readonly Button openInOrdersButton = DesktopTheme.Button("Ir a &Órdenes de la reserva", DesktopTheme.Sidebar, DesktopTheme.Cream, DesktopTheme.SidebarHover);
+    private readonly Button reconcileReceptionButton = DesktopTheme.Button("Consultar estado tras fallo de red", DesktopTheme.Sidebar, DesktopTheme.Cream, DesktopTheme.SidebarHover);
+
     private IReadOnlyList<TableDto> loadedTables = [];
     private IReadOnlyList<ReservationDto> currentReservations = [];
     private ReservationDto? selectedReservation;
+    private OrderDto? selectedReservationOrder;
     private bool createMode = true;
     private string? uncertainCreateKey;
+    private long? uncertainReceptionReservationId;
     private int currentPage = 1;
     private int totalPages = 1;
     private int totalCount;
     private bool suppressSelectionChanged;
     private CancellationTokenSource? pendingOperation;
+
+    internal event EventHandler<ReservationOrdersNavigationArgs>? OpenOrdersModuleRequested;
 
     internal ReservationsForm(ReservationApiService reservations, TableApiService tables, long currentActorUserId)
     {
@@ -74,7 +91,8 @@ internal sealed class ReservationsForm : UserControl
         foreach (var status in Enum.GetValues<ReservationStatus>())
         {
             statusFilterCombo.Items.Add(new StatusFilterItem(status, ReservationApiService.FormatStatus(status)));
-            statusActionCombo.Items.Add(new StatusItem(status, ReservationApiService.FormatStatus(status)));
+            if (status != ReservationStatus.Completed)
+                statusActionCombo.Items.Add(new StatusItem(status, ReservationApiService.FormatStatus(status)));
         }
         statusFilterCombo.SelectedIndex = 0;
         statusActionCombo.SelectedIndex = 0;
@@ -86,12 +104,14 @@ internal sealed class ReservationsForm : UserControl
         root.Controls.Add(BuildFilterBar());
         root.Controls.Add(DesktopTheme.FeedbackBar(feedback, progress, "Operación de reservaciones en curso"));
         root.Controls.Add(BuildGridCard());
+        root.Controls.Add(BuildReceptionCard());
         root.Controls.Add(BuildEditorCard());
         Controls.Add(root);
 
         searchButton.Click += async (_, _) =>
         {
             uncertainCreateKey = null;
+            uncertainReceptionReservationId = null;
             await LoadReservationsAsync(1, selectedReservation?.Id, reloadTables: true);
         };
         clearFiltersButton.Click += async (_, _) => await ClearFiltersAsync();
@@ -106,12 +126,20 @@ internal sealed class ReservationsForm : UserControl
         };
         saveButton.Click += async (_, _) => await SaveReservationAsync();
         changeStatusButton.Click += async (_, _) => await ChangeSelectedStatusAsync();
+        receiveAndActivateButton.Click += async (_, _) => await ActivateSelectedPreOrderAsync();
+        receiveWithoutPreOrderButton.Click += async (_, _) => await ReceiveSelectedReservationAsync();
+        reconcileReceptionButton.Click += async (_, _) => await ReconcileUncertainReceptionAsync();
+        openInOrdersButton.Click += (_, _) =>
+        {
+            if (selectedReservation is { } current)
+                OpenOrdersModuleRequested?.Invoke(this, new ReservationOrdersNavigationArgs(current, selectedReservationOrder));
+        };
 
-        grid.SelectionChanged += (_, _) =>
+        grid.SelectionChanged += async (_, _) =>
         {
             if (suppressSelectionChanged) return;
             if (grid.CurrentRow?.Tag is ReservationDto res)
-                LoadReservationIntoEditor(res);
+                await SelectReservationAsync(res);
         };
 
         EnterCreateMode();
@@ -161,12 +189,14 @@ internal sealed class ReservationsForm : UserControl
             if (lookupId > 0)
             {
                 var single = await reservations.GetByIdAsync(lookupId, cts.Token);
+                var singleOrder = await reservations.TryGetPreOrderAsync(single.Id, cts.Token);
                 if (cts.IsCancellationRequested || IsDisposed) return;
                 currentReservations = [single];
                 currentPage = 1;
                 totalPages = 1;
                 totalCount = 1;
                 BindGrid(single.Id);
+                LoadReservationIntoEditor(single, singleOrder);
                 return;
             }
 
@@ -179,7 +209,17 @@ internal sealed class ReservationsForm : UserControl
             currentPage = page.PageNumber;
             totalPages = Math.Max(1, page.TotalPages);
             totalCount = page.TotalCount;
-            BindGrid(preferredId);
+            var target = preferredId.HasValue
+                ? currentReservations.FirstOrDefault(r => r.Id == preferredId.Value)
+                : currentReservations.FirstOrDefault();
+            OrderDto? targetOrder = null;
+            if (target is not null)
+                targetOrder = await reservations.TryGetPreOrderAsync(target.Id, cts.Token);
+            if (cts.IsCancellationRequested || IsDisposed) return;
+
+            BindGrid(target?.Id);
+            if (target is not null)
+                LoadReservationIntoEditor(target, targetOrder);
         }
         catch (OperationCanceledException) when (cts.IsCancellationRequested) { }
         catch (ApiException error)
@@ -253,11 +293,14 @@ internal sealed class ReservationsForm : UserControl
             var page = await reservations.GetPagedAsync(currentPage, DefaultPageSize, null,
                 (tableFilterCombo.SelectedItem as TableFilterItem)?.TableId,
                 (statusFilterCombo.SelectedItem as StatusFilterItem)?.Status, cts.Token);
+            var savedOrder = await reservations.TryGetPreOrderAsync(saved.Id, cts.Token);
+            if (cts.IsCancellationRequested || IsDisposed) return;
+
             currentReservations = page.Items.ToArray();
             totalPages = Math.Max(1, page.TotalPages);
             totalCount = page.TotalCount;
             BindGrid(saved.Id);
-            LoadReservationIntoEditor(saved);
+            LoadReservationIntoEditor(saved, savedOrder);
             ShowFeedback($"Reservación #{saved.Id} guardada en Mesa #{saved.TableNumber ?? table.Number:00}.", isError: false);
         }
         catch (OperationCanceledException) when (cts.IsCancellationRequested) { }
@@ -275,11 +318,13 @@ internal sealed class ReservationsForm : UserControl
                 try
                 {
                     var reloaded = await reservations.GetByIdAsync(current.Id, cts.Token);
-                    LoadReservationIntoEditor(reloaded);
+                    var reloadedOrder = await reservations.TryGetPreOrderAsync(current.Id, cts.Token);
+                    LoadReservationIntoEditor(reloaded, reloadedOrder);
                     ShowFeedback($"{error.Message} Se recargó la Reservación #{reloaded.Id}.", isError: true);
                     return;
                 }
                 catch (ApiException) { }
+                catch (OperationCanceledException) when (cts.IsCancellationRequested) { return; }
             }
             ShowFeedback(error.Message, isError: true);
         }
@@ -304,12 +349,207 @@ internal sealed class ReservationsForm : UserControl
         {
             await reservations.ChangeStatusAsync(current.Id, targetStatus, cts.Token);
             var refreshed = await reservations.GetByIdAsync(current.Id, cts.Token);
+            var refreshedOrder = await reservations.TryGetPreOrderAsync(current.Id, cts.Token);
             if (cts.IsCancellationRequested || IsDisposed) return;
 
             currentReservations = currentReservations.Select(r => r.Id == refreshed.Id ? refreshed : r).ToArray();
             BindGrid(refreshed.Id);
-            LoadReservationIntoEditor(refreshed);
+            LoadReservationIntoEditor(refreshed, refreshedOrder);
             ShowFeedback($"Reservación #{refreshed.Id} actualizada a estado «{ReservationApiService.FormatStatus(refreshed.Status)}».", isError: false);
+        }
+        catch (OperationCanceledException) when (cts.IsCancellationRequested) { }
+        catch (ApiException error)
+        {
+            if (cts.IsCancellationRequested || IsDisposed) return;
+            if (error.StatusCode == HttpStatusCode.Conflict)
+            {
+                await TryReloadSelectedReservationAndOrderAsync(current.Id, error.Message, cts.Token);
+                return;
+            }
+            ShowFeedback(error.Message, isError: true);
+        }
+        finally
+        {
+            pendingOperation = null;
+            if (!IsDisposed) SetBusy(false);
+        }
+    }
+
+    private async Task SelectReservationAsync(ReservationDto res)
+    {
+        if (pendingOperation is not null)
+        {
+            LoadReservationIntoEditor(res, selectedReservation?.Id == res.Id ? selectedReservationOrder : null);
+            return;
+        }
+
+        using var cts = new CancellationTokenSource();
+        pendingOperation = cts;
+        SetBusy(true);
+        try
+        {
+            var linkedOrder = await reservations.TryGetPreOrderAsync(res.Id, cts.Token);
+            if (!cts.IsCancellationRequested && !IsDisposed)
+                LoadReservationIntoEditor(res, linkedOrder);
+        }
+        catch (OperationCanceledException) when (cts.IsCancellationRequested) { }
+        catch (ApiException error)
+        {
+            if (!cts.IsCancellationRequested && !IsDisposed)
+            {
+                LoadReservationIntoEditor(res, null);
+                ShowFeedback(error.Message, isError: true);
+            }
+        }
+        finally
+        {
+            pendingOperation = null;
+            if (!IsDisposed) SetBusy(false);
+        }
+    }
+
+    private async Task ActivateSelectedPreOrderAsync()
+    {
+        if (pendingOperation is not null || createMode || selectedReservation is not { } current) return;
+        if (uncertainReceptionReservationId == current.Id)
+        {
+            ShowFeedback("La recepción/activación anterior quedó incierta por red. Pulsa «Consultar estado tras fallo de red» antes de reintentar.", isError: true);
+            return;
+        }
+
+        using var cts = new CancellationTokenSource();
+        pendingOperation = cts;
+        SetBusy(true);
+        ShowFeedback("", isError: false);
+        OrderDto? confirmedActivation = null;
+
+        try
+        {
+            var activatedOrder = await reservations.ActivatePreOrderAsync(current.Id, cts.Token);
+            confirmedActivation = activatedOrder;
+            var refreshedReservation = await reservations.GetByIdAsync(current.Id, cts.Token);
+            var tablesPage = await tables.GetPagedAsync(1, 200, cts.Token);
+            if (cts.IsCancellationRequested || IsDisposed) return;
+
+            uncertainReceptionReservationId = null;
+            loadedTables = tablesPage.Items.OrderBy(t => t.Number).ToArray();
+            currentReservations = currentReservations.Select(r => r.Id == refreshedReservation.Id ? refreshedReservation : r).ToArray();
+            BindGrid(refreshedReservation.Id);
+            LoadReservationIntoEditor(refreshedReservation, activatedOrder);
+            var tableNum = activatedOrder.TableNumber ?? refreshedReservation.TableNumber ?? refreshedReservation.TableId;
+            ShowFeedback(
+                $"Cliente recibido. Preorden #{activatedOrder.Id} activada a «{OrderApiService.FormatStatus(activatedOrder.Status)}» en Mesa #{tableNum:00} (Total conservado: {activatedOrder.Total:C2}).",
+                isError: false);
+        }
+        catch (OperationCanceledException) when (cts.IsCancellationRequested) { }
+        catch (ApiException error)
+        {
+            if (cts.IsCancellationRequested || IsDisposed) return;
+            if (confirmedActivation is not null)
+            {
+                uncertainReceptionReservationId = current.Id;
+                ShowFeedback($"Preorden #{confirmedActivation.Id} activada. No se pudo actualizar la vista. Consulta el estado para continuar.", isError: true);
+                return;
+            }
+            if (error.StatusCode is null || (int)error.StatusCode.Value >= 500)
+            {
+                uncertainReceptionReservationId = current.Id;
+                ShowFeedback(
+                    $"{error.Message} No se confirmó si la preorden fue activada. No reenvíes automáticamente; pulsa «Consultar estado tras fallo de red».",
+                    isError: true);
+                return;
+            }
+            if (error.StatusCode == HttpStatusCode.Conflict)
+            {
+                await TryReloadSelectedReservationAndOrderAsync(current.Id, error.Message, cts.Token);
+                return;
+            }
+            ShowFeedback(error.Message, isError: true);
+        }
+        finally
+        {
+            pendingOperation = null;
+            if (!IsDisposed) SetBusy(false);
+        }
+    }
+
+    private async Task ReceiveSelectedReservationAsync()
+    {
+        if (pendingOperation is not null || createMode || selectedReservation is not { } current) return;
+        if (uncertainReceptionReservationId == current.Id)
+        {
+            ShowFeedback("La recepción anterior quedó incierta por red. Pulsa «Consultar estado tras fallo de red» antes de reintentar.", isError: true);
+            return;
+        }
+
+        using var cts = new CancellationTokenSource();
+        pendingOperation = cts;
+        SetBusy(true);
+        ShowFeedback("", isError: false);
+
+        try
+        {
+            var received = await reservations.ReceiveAsync(current.Id, cts.Token);
+            if (cts.IsCancellationRequested || IsDisposed) return;
+
+            uncertainReceptionReservationId = null;
+            currentReservations = currentReservations.Select(r => r.Id == received.Id ? received : r).ToArray();
+            BindGrid(received.Id);
+            LoadReservationIntoEditor(received, null);
+            var tableNum = received.TableNumber ?? received.TableId;
+            ShowFeedback(
+                $"Cliente de la Reservación #{received.Id} recibido en Mesa #{tableNum:00} (sin preorden). Usa «Ir a Órdenes de la reserva» para abrir su orden operativa.",
+                isError: false);
+        }
+        catch (OperationCanceledException) when (cts.IsCancellationRequested) { }
+        catch (ApiException error)
+        {
+            if (cts.IsCancellationRequested || IsDisposed) return;
+            if (error.StatusCode is null || (int)error.StatusCode.Value >= 500)
+            {
+                uncertainReceptionReservationId = current.Id;
+                ShowFeedback(
+                    $"{error.Message} No se confirmó si la llegada fue registrada. Pulsa «Consultar estado tras fallo de red».",
+                    isError: true);
+                return;
+            }
+            if (error.StatusCode == HttpStatusCode.Conflict)
+            {
+                await TryReloadSelectedReservationAndOrderAsync(current.Id, error.Message, cts.Token);
+                return;
+            }
+            ShowFeedback(error.Message, isError: true);
+        }
+        finally
+        {
+            pendingOperation = null;
+            if (!IsDisposed) SetBusy(false);
+        }
+    }
+
+    private async Task ReconcileUncertainReceptionAsync()
+    {
+        if (pendingOperation is not null || selectedReservation is not { } current) return;
+        using var cts = new CancellationTokenSource();
+        pendingOperation = cts;
+        SetBusy(true);
+        ShowFeedback("", isError: false);
+
+        try
+        {
+            var refreshed = await reservations.GetByIdAsync(current.Id, cts.Token);
+            var linkedOrder = await reservations.TryGetPreOrderAsync(current.Id, cts.Token);
+            var tablesPage = await tables.GetPagedAsync(1, 200, cts.Token);
+            if (cts.IsCancellationRequested || IsDisposed) return;
+
+            uncertainReceptionReservationId = null;
+            loadedTables = tablesPage.Items.OrderBy(t => t.Number).ToArray();
+            currentReservations = currentReservations.Select(r => r.Id == refreshed.Id ? refreshed : r).ToArray();
+            BindGrid(refreshed.Id);
+            LoadReservationIntoEditor(refreshed, linkedOrder);
+            ShowFeedback(
+                $"Estado reconciliado desde el servidor: {ReservationApiService.FormatOperationalState(refreshed, linkedOrder)}.",
+                isError: false);
         }
         catch (OperationCanceledException) when (cts.IsCancellationRequested) { }
         catch (ApiException error)
@@ -324,10 +564,34 @@ internal sealed class ReservationsForm : UserControl
         }
     }
 
+    private async Task TryReloadSelectedReservationAndOrderAsync(long reservationId, string conflictMessage, CancellationToken token)
+    {
+        try
+        {
+            var reloaded = await reservations.GetByIdAsync(reservationId, token);
+            var reloadedOrder = await reservations.TryGetPreOrderAsync(reservationId, token);
+            var tablesPage = await tables.GetPagedAsync(1, 200, token);
+            if (token.IsCancellationRequested || IsDisposed) return;
+
+            loadedTables = tablesPage.Items.OrderBy(t => t.Number).ToArray();
+            currentReservations = currentReservations.Select(r => r.Id == reloaded.Id ? reloaded : r).ToArray();
+            BindGrid(reloaded.Id);
+            LoadReservationIntoEditor(reloaded, reloadedOrder);
+            ShowFeedback($"{conflictMessage} Estado recargado: {ReservationApiService.FormatOperationalState(reloaded, reloadedOrder)}.", isError: true);
+        }
+        catch (ApiException)
+        {
+            if (!token.IsCancellationRequested && !IsDisposed) ShowFeedback(conflictMessage, isError: true);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+    }
+
     private void EnterCreateMode()
     {
         createMode = true;
         selectedReservation = null;
+        selectedReservationOrder = null;
+        uncertainReceptionReservationId = null;
         editorTitleLabel.Text = "Crear nueva reservación interna";
         contactSummaryLabel.Text = "Reservación interna asociada a un ID de usuario activo del sistema.";
         userIdInput.Value = Math.Clamp(currentActorUserId, (long)userIdInput.Minimum, (long)userIdInput.Maximum);
@@ -336,12 +600,14 @@ internal sealed class ReservationsForm : UserControl
         peopleInput.Value = 2;
         notesInput.Clear();
         changeStatusButton.Enabled = statusActionCombo.Enabled = false;
+        UpdateReceptionView();
     }
 
-    private void LoadReservationIntoEditor(ReservationDto res)
+    private void LoadReservationIntoEditor(ReservationDto res, OrderDto? linkedOrder = null)
     {
         createMode = false;
         selectedReservation = res;
+        selectedReservationOrder = linkedOrder;
         editorTitleLabel.Text = $"Editar Reservación #{res.Id} · Estado: {ReservationApiService.FormatStatus(res.Status)}";
 
         if (res.UserId.HasValue)
@@ -371,6 +637,65 @@ internal sealed class ReservationsForm : UserControl
             }
         }
         changeStatusButton.Enabled = statusActionCombo.Enabled = pendingOperation is null;
+        UpdateReceptionView();
+    }
+
+    private void UpdateReceptionView()
+    {
+        var busy = pendingOperation is not null;
+        preorderItemsGrid.Rows.Clear();
+
+        if (createMode || selectedReservation is not { } res)
+        {
+            receptionStateLabel.Text = "Selecciona una reservación en el listado para consultar su preorden y registrar la llegada del cliente.";
+            arrivalWindowLabel.Text = "";
+            preorderSummaryLabel.Text = "";
+            receiveAndActivateButton.Enabled = false;
+            receiveWithoutPreOrderButton.Enabled = false;
+            openInOrdersButton.Enabled = false;
+            reconcileReceptionButton.Visible = false;
+            reconcileReceptionButton.Enabled = false;
+            return;
+        }
+
+        var arrival = ReservationApiService.EvaluateArrivalWindow(res.ReservationDateTime, DateTimeOffset.UtcNow);
+        var tableText = res.TableNumber.HasValue ? $"Mesa #{res.TableNumber.Value:00}" : $"Mesa #{res.TableId}";
+        receptionStateLabel.Text = $"Reservación #{res.Id} ({tableText} · {res.NumberOfPeople}p) — {ReservationApiService.FormatOperationalState(res, selectedReservationOrder)}";
+        arrivalWindowLabel.Text = $"Horario reservado: {res.ReservationDateTime.ToLocalTime():g} · Ventana de llegada: {arrival.Label}";
+        arrivalWindowLabel.ForeColor = arrival.CanReceive
+            ? (arrival.IsLate ? DesktopTheme.Ink : DesktopTheme.Muted)
+            : DesktopTheme.Error;
+
+        if (selectedReservationOrder is { } order)
+        {
+            preorderSummaryLabel.Text =
+                $"Orden vinculada #{order.Id} · Estado: {OrderApiService.FormatStatus(order.Status)} · Origen: {order.Origin} · Total conservado: {order.Total:C2} ({order.Details.Count} líneas)";
+            foreach (var d in order.Details)
+            {
+                preorderItemsGrid.Rows.Add(
+                    $"#{d.ProductId}",
+                    d.ProductName,
+                    d.Quantity.ToString(CultureInfo.InvariantCulture),
+                    d.UnitPrice.ToString("C2", CultureInfo.CurrentCulture),
+                    d.Subtotal.ToString("C2", CultureInfo.CurrentCulture),
+                    string.IsNullOrWhiteSpace(d.Note) ? "—" : d.Note);
+            }
+        }
+        else
+        {
+            preorderSummaryLabel.Text = "Preorden / Orden: Sin preorden registrada. Puedes recibir al cliente y luego abrir su orden operativa en la mesa asignada.";
+        }
+
+        var canReceiveReservation = res.Status is ReservationStatus.Pending or ReservationStatus.Confirmed && arrival.CanReceive;
+        var isUncertain = uncertainReceptionReservationId == res.Id;
+
+        receiveAndActivateButton.Enabled = !busy && !isUncertain && canReceiveReservation && selectedReservationOrder?.Status == OrderStatus.PreOrdered;
+        receiveWithoutPreOrderButton.Enabled = !busy && !isUncertain && canReceiveReservation && selectedReservationOrder is null;
+        openInOrdersButton.Enabled = !busy && (
+            (selectedReservationOrder is not null && selectedReservationOrder.Status != OrderStatus.PreOrdered) ||
+            (res.Status == ReservationStatus.Completed && selectedReservationOrder is null && arrival.CanReceive));
+        reconcileReceptionButton.Visible = isUncertain;
+        reconcileReceptionButton.Enabled = !busy && isUncertain;
     }
 
     private void BindTableCombos(long? filterTableId, long? editorTableId)
@@ -511,6 +836,56 @@ internal sealed class ReservationsForm : UserControl
         return card;
     }
 
+    private Control BuildReceptionCard()
+    {
+        var card = Stack();
+        card.Dock = DockStyle.Top;
+        card.BackColor = DesktopTheme.Paper;
+        card.Padding = new Padding(20);
+        card.Margin = new Padding(0, 0, 0, 16);
+
+        var heading = DesktopTheme.Label("2. Recepción en restaurante y preorden Web", DesktopTheme.Strong, DesktopTheme.Ink);
+        heading.Margin = new Padding(0, 0, 0, 6);
+        receptionStateLabel.Margin = new Padding(0, 0, 0, 4);
+        arrivalWindowLabel.Margin = new Padding(0, 0, 0, 6);
+        preorderSummaryLabel.Margin = new Padding(0, 0, 0, 8);
+
+        card.Controls.Add(heading);
+        card.Controls.Add(receptionStateLabel);
+        card.Controls.Add(arrivalWindowLabel);
+        card.Controls.Add(preorderSummaryLabel);
+
+        DesktopTheme.ConfigureGrid(preorderItemsGrid, "Productos de la preorden u orden vinculada", 120);
+        preorderItemsGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "ProductId", HeaderText = "ID Prod.", FillWeight = 12 });
+        preorderItemsGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "ProductName", HeaderText = "Producto", FillWeight = 34 });
+        preorderItemsGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Quantity", HeaderText = "Cant.", FillWeight = 12 });
+        preorderItemsGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "UnitPrice", HeaderText = "Precio Unit.", FillWeight = 16 });
+        preorderItemsGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Subtotal", HeaderText = "Subtotal", FillWeight = 16 });
+        preorderItemsGrid.Columns.Add(new DataGridViewTextBoxColumn { Name = "Note", HeaderText = "Notas", FillWeight = 24 });
+        card.Controls.Add(preorderItemsGrid);
+
+        var actionsBar = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            WrapContents = true,
+            Margin = new Padding(0, 10, 0, 0)
+        };
+        receiveAndActivateButton.Margin = new Padding(0, 0, 10, 6);
+        receiveWithoutPreOrderButton.Margin = new Padding(0, 0, 10, 6);
+        openInOrdersButton.Margin = new Padding(0, 0, 10, 6);
+        reconcileReceptionButton.Margin = new Padding(0, 0, 0, 6);
+        reconcileReceptionButton.Visible = false;
+
+        actionsBar.Controls.Add(receiveAndActivateButton);
+        actionsBar.Controls.Add(receiveWithoutPreOrderButton);
+        actionsBar.Controls.Add(openInOrdersButton);
+        actionsBar.Controls.Add(reconcileReceptionButton);
+        card.Controls.Add(actionsBar);
+
+        return card;
+    }
+
     private Control BuildEditorCard()
     {
         var card = Stack();
@@ -571,7 +946,7 @@ internal sealed class ReservationsForm : UserControl
     {
         tableFilterCombo.Enabled = statusFilterCombo.Enabled = reservationIdLookup.Enabled =
             searchButton.Enabled = clearFiltersButton.Enabled = newModeButton.Enabled = grid.Enabled =
-            tableCombo.Enabled = dateTimePicker.Enabled = peopleInput.Enabled =
+            preorderItemsGrid.Enabled = tableCombo.Enabled = dateTimePicker.Enabled = peopleInput.Enabled =
             notesInput.Enabled = saveButton.Enabled = !busy;
         userIdInput.Enabled = !busy && (createMode || selectedReservation?.UserId.HasValue == true);
         statusActionCombo.Enabled = changeStatusButton.Enabled = !busy && !createMode && selectedReservation is not null;
@@ -579,6 +954,7 @@ internal sealed class ReservationsForm : UserControl
         nextPageButton.Enabled = !busy && currentPage < totalPages;
         progress.Visible = busy;
         UseWaitCursor = busy;
+        UpdateReceptionView();
     }
 
     private void ShowFeedback(string message, bool isError) =>

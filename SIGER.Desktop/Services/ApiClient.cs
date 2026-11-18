@@ -74,6 +74,20 @@ internal sealed class ApiClient(HttpClient http, SessionService session)
             {
                 if (response.StatusCode == HttpStatusCode.Unauthorized && credential is not null)
                     session.Invalidate(credential);
+                if (response.StatusCode == HttpStatusCode.Conflict && method == HttpMethod.Post &&
+                    destination.AbsolutePath.EndsWith("/api/v1/payments", StringComparison.Ordinal))
+                {
+                    try
+                    {
+                        var problem = await response.Content.ReadFromJsonAsync<JsonElement>(timeout.Token).ConfigureAwait(false);
+                        if (problem.ValueKind == JsonValueKind.Object && problem.TryGetProperty("detail", out var detail) &&
+                            detail.ValueKind == JsonValueKind.String &&
+                            PaymentApiService.TranslatePaymentConflict(detail.GetString()) is { } message)
+                            throw new ApiException(message, response.StatusCode);
+                    }
+                    catch (JsonException) { }
+                    catch (InvalidOperationException) { }
+                }
                 throw ErrorFor(response.StatusCode);
             }
 

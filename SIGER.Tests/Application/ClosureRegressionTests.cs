@@ -24,22 +24,48 @@ public class ClosureRegressionTests
         f.Work.Verify(x => x.SaveChangesAsync(f.Token), Times.Once);
     }
 
-    [Theory]
-    [InlineData(false)] [InlineData(true)]
-    public async Task Payment_releases_table_only_without_other_active_orders(bool anotherOrder)
+    [Fact]
+    public async Task Payment_keeps_table_occupied_with_other_active_orders()
     {
         var f = new ServiceFixture();
         f.Table.Status = TableStatus.Occupied;
+        f.Order.Status = OrderStatus.Served;
+        f.Order.AccountRequested = true;
         f.Orders.Setup(x => x.HasActiveOrdersAsync(4, 5, f.Token)).ReturnsAsync(() =>
-        { Assert.True(f.InTransaction); return anotherOrder; });
+        { Assert.True(f.InTransaction); return true; });
         var result = await f.PaymentService.ProcessPaymentAsync(
             new() { OrderId = 5, UserId = 1, Amount = 25m, Method = PaymentMethod.Cash }, f.Token);
         Assert.True(result.IsSuccess);
         Assert.Equal(OrderStatus.Paid, f.Order.Status);
-        Assert.Equal(anotherOrder ? TableStatus.Occupied : TableStatus.Available, f.Table.Status);
+        Assert.Equal(TableStatus.Occupied, f.Table.Status);
         f.Tables.Verify(x => x.GetByIdForUpdateAsync(4, f.Token), Times.Once);
         f.Orders.Verify(x => x.HasActiveOrdersAsync(4, 5, f.Token), Times.Once);
         f.Work.Verify(x => x.SaveChangesAsync(f.Token), Times.Once);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Closing_order_preserves_table_marked_out_of_service(bool paid)
+    {
+        var f = new ServiceFixture();
+        f.Table.Status = TableStatus.OutOfService;
+        if (paid)
+        {
+            f.Order.Status = OrderStatus.Served;
+            f.Order.AccountRequested = true;
+            var result = await f.PaymentService.ProcessPaymentAsync(
+                new() { OrderId = 5, UserId = 1, Amount = 25m, Method = PaymentMethod.Cash }, f.Token);
+            Assert.True(result.IsSuccess);
+        }
+        else
+        {
+            var result = await f.OrderService.UpdateStatusAsync(
+                5, new() { Status = OrderStatus.Cancelled, Version = 5 }, f.Token);
+            Assert.True(result.IsSuccess);
+        }
+        Assert.Equal(TableStatus.OutOfService, f.Table.Status);
+        f.Tables.Verify(x => x.Update(It.IsAny<Table>()), Times.Never);
     }
 
     [Theory]

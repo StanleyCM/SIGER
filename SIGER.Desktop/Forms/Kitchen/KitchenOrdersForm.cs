@@ -216,8 +216,9 @@ internal sealed class KitchenOrdersForm : UserControl
                 {
                     // Keep original conflict message if refresh also fails.
                 }
+                catch (OperationCanceledException) when (cts.IsCancellationRequested) { return; }
             }
-            else if (error.StatusCode is null)
+            else if (error.StatusCode is null || (int)error.StatusCode.Value >= 500)
             {
                 uncertainOrderId = current.Id;
                 ShowFeedback(

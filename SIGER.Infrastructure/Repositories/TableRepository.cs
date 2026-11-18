@@ -10,8 +10,13 @@ namespace SIGER.Infrastructure.Repositories;
 public class TableRepository : ITableRepository
 {
     private readonly SIGERDbContext _context;
+    private readonly TimeProvider _clock;
 
-    public TableRepository(SIGERDbContext context) => _context = context;
+    public TableRepository(SIGERDbContext context, TimeProvider? clock = null)
+    {
+        _context = context;
+        _clock = clock ?? TimeProvider.System;
+    }
 
     public async Task<IReadOnlyCollection<long>> GetReservationCandidateIdsAsync(int people, CancellationToken cancellationToken = default)
         => await _context.Tables.AsNoTracking().Where(t => t.Status != TableStatus.OutOfService && t.Capacity >= people)
@@ -24,7 +29,7 @@ public class TableRepository : ITableRepository
     {
         if (_context.Database.CurrentTransaction is null)
             throw new InvalidOperationException("A transaction is required to lock a table.");
-        var table = await _context.Tables.FromSqlInterpolated($"SELECT * FROM public.mesa WHERE id_mesa = {id} FOR UPDATE")
+        var table = await _context.Tables.FromSqlInterpolated($"SELECT * FROM public.mesa WHERE id_mesa = {id} FOR NO KEY UPDATE")
             .SingleOrDefaultAsync(cancellationToken);
         // A preceding relationship load may already have tracked this table before acquiring the lock.
         if (table is not null) await _context.Entry(table).ReloadAsync(cancellationToken);
@@ -40,7 +45,15 @@ public class TableRepository : ITableRepository
     }
 
     public async Task<IReadOnlyCollection<Table>> GetAvailableAsync(CancellationToken cancellationToken = default)
-        => await _context.Tables.AsNoTracking().Where(table => table.Status == TableStatus.Available).OrderBy(table => table.Number).ToArrayAsync(cancellationToken);
+    {
+        var received = ReservationRepository.ReceivedPartiesWithoutOrder(_context, _clock.GetUtcNow());
+        return await _context.Tables.AsNoTracking()
+            .Where(table => table.Status == TableStatus.Available && !received.Any(reservation => reservation.TableId == table.Id))
+            .Where(table => !_context.Orders.Any(order => order.TableId == table.Id &&
+                (order.Status == OrderStatus.Pending || order.Status == OrderStatus.InPreparation ||
+                 order.Status == OrderStatus.Ready || order.Status == OrderStatus.Served)))
+            .OrderBy(table => table.Number).ToArrayAsync(cancellationToken);
+    }
 
     public async Task AddAsync(Table table, CancellationToken cancellationToken = default)
         => await _context.Tables.AddAsync(table, cancellationToken);

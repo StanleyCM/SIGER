@@ -97,7 +97,7 @@ internal sealed class ServiceFixture
     public CategoryService CategoryService => new(Categories.Object, Work.Object);
     public ProductService ProductService => new(Products.Object, Categories.Object, Work.Object);
     public TableService TableService => new(Tables.Object, Work.Object, Orders.Object);
-    public OrderService OrderService => new(Orders.Object, Tables.Object, Products.Object, Users.Object, Work.Object);
+    public OrderService OrderService => new(Orders.Object, Tables.Object, Products.Object, Users.Object, Work.Object, Reservations.Object);
     public KitchenService KitchenService => new(Orders.Object, Work.Object);
     public PaymentService PaymentService => new(Payments.Object, Orders.Object, Tables.Object, Users.Object, Work.Object);
     public ReservationService ReservationService => new(Reservations.Object, Users.Object, Tables.Object, Work.Object, Orders.Object);

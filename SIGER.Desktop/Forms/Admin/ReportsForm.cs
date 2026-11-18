@@ -20,7 +20,7 @@ internal sealed class ReportsForm : UserControl
 
     private readonly Label salesSummaryLabel = DesktopTheme.Label("Selecciona un rango de fechas y pulsa «Consultar reportes».", DesktopTheme.BrandSubtitle, DesktopTheme.Ink);
     private readonly Label dateSemanticsNoteLabel = DesktopTheme.Label(
-        "Semántica del backend: el reporte de ventas contabiliza órdenes en estado Pagada filtradas por la fecha de creación de la orden (OrderDateTime).",
+        "El período corresponde a la fecha del pago completado, en hora de Santo Domingo.",
         DesktopTheme.Small,
         DesktopTheme.Muted);
     private readonly DataGridView topProductsGrid = new();
@@ -37,8 +37,9 @@ internal sealed class ReportsForm : UserControl
         Font = DesktopTheme.Body;
         Margin = Padding.Empty;
 
-        startDatePicker.Value = DateTime.Now.Date.AddDays(-7);
-        endDatePicker.Value = DateTime.Now.Date;
+        var today = ReportApiService.RestaurantDate(DateTimeOffset.UtcNow);
+        startDatePicker.Value = today.AddDays(-7).ToDateTime(TimeOnly.MinValue);
+        endDatePicker.Value = today.ToDateTime(TimeOnly.MinValue);
 
         var root = Stack();
         root.Dock = DockStyle.Top;
@@ -65,16 +66,15 @@ internal sealed class ReportsForm : UserControl
     {
         if (pendingOperation is not null) return;
 
-        var localStart = startDatePicker.Value.Date;
-        var localEnd = endDatePicker.Value.Date.AddDays(1).AddTicks(-1);
+        var localStart = DateOnly.FromDateTime(startDatePicker.Value);
+        var localEnd = DateOnly.FromDateTime(endDatePicker.Value);
         if (localEnd < localStart)
         {
             ShowFeedback("La fecha final no puede ser anterior a la fecha inicial.", isError: true);
             return;
         }
 
-        var startDto = new DateTimeOffset(localStart, TimeZoneInfo.Local.GetUtcOffset(localStart));
-        var endDto = new DateTimeOffset(localEnd, TimeZoneInfo.Local.GetUtcOffset(localEnd));
+        var (startDto, endDto) = ReportApiService.RestaurantDateRange(localStart, localEnd);
         var limit = (int)limitInput.Value;
 
         using var cts = new CancellationTokenSource();
@@ -84,18 +84,14 @@ internal sealed class ReportsForm : UserControl
 
         try
         {
-            var salesTask = reports.GetSalesReportAsync(startDto, endDto, cts.Token);
-            var topTask = reports.GetTopProductsAsync(startDto, endDto, limit, cts.Token);
-            await Task.WhenAll(salesTask, topTask);
+            var sales = await reports.GetSalesReportAsync(startDto, endDto, cts.Token, limit);
+            var topProducts = sales.TopSellingProducts;
 
             if (cts.IsCancellationRequested || IsDisposed) return;
 
-            var sales = salesTask.Result;
-            var topProducts = topTask.Result;
-
             salesSummaryLabel.Text =
-                $"Período {localStart:d} al {endDatePicker.Value.Date:d}   |   " +
-                $"Órdenes pagadas: {sales.TotalOrders}   |   " +
+                $"Período {localStart:d} al {localEnd:d}   |   " +
+                $"Pagos completados: {sales.TotalOrders}   |   " +
                 $"Ingresos totales: {sales.TotalRevenue:C2}";
 
             BindTopProducts(topProducts);

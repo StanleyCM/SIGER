@@ -53,10 +53,16 @@ internal sealed class OrderApiService(ApiClient api)
     }
 
     internal Task<OrderDto> CreateTableOrderAsync(long tableId, IReadOnlyCollection<CreateOrderDetailRequestDto> items,
-        string? notes = null, CancellationToken cancellationToken = default)
+        string? notes = null, CancellationToken cancellationToken = default) =>
+        CreateTableOrderAsync(tableId, items, notes, reservationId: null, cancellationToken);
+
+    internal Task<OrderDto> CreateTableOrderAsync(long tableId, IReadOnlyCollection<CreateOrderDetailRequestDto> items,
+        string? notes, long? reservationId, CancellationToken cancellationToken = default)
     {
         if (tableId <= 0)
             throw new ApiException("Selecciona una mesa válida para crear la orden.");
+        if (reservationId is <= 0)
+            throw new ApiException("El identificador de reservación debe ser positivo.");
         if (items is null || items.Count == 0)
             throw new ApiException("Agrega al menos un producto a la orden.");
         if (items.Any(item => item is null || item.ProductId <= 0 || item.Quantity <= 0))
@@ -64,6 +70,7 @@ internal sealed class OrderApiService(ApiClient api)
 
         var request = new CreateOrderRequestDto
         {
+            ReservationId = reservationId,
             TableId = tableId,
             Origin = OrderOrigin.Desktop,
             Type = OrderType.Table,

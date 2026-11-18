@@ -224,6 +224,7 @@ internal sealed class ProductsForm : UserControl
                     return;
                 }
                 catch (ApiException) { }
+                catch (OperationCanceledException) when (cts.IsCancellationRequested) { return; }
             }
             ShowFeedback(error.Message, isError: true);
         }

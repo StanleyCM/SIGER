@@ -21,7 +21,8 @@ public class ReservationRepository : IReservationRepository
     {
         if (_context.Database.CurrentTransaction is null)
             throw new InvalidOperationException("A transaction is required to lock a reservation.");
-        var reservation = await _context.Reservations.FromSqlInterpolated($"SELECT * FROM public.reserva WHERE id_reserva = {id} FOR UPDATE")
+        // Serialize business changes without blocking foreign-key checks of the unchanged primary key.
+        var reservation = await _context.Reservations.FromSqlInterpolated($"SELECT * FROM public.reserva WHERE id_reserva = {id} FOR NO KEY UPDATE")
             .SingleOrDefaultAsync(cancellationToken);
         // The API's ownership check may already have tracked this reservation before the lock.
         if (reservation is not null) await _context.Entry(reservation).ReloadAsync(cancellationToken);
@@ -31,8 +32,20 @@ public class ReservationRepository : IReservationRepository
     public Task<bool> HasOverlapAsync(long tableId, DateTimeOffset start, DateTimeOffset end, long? excludingId = null, CancellationToken cancellationToken = default)
         => _context.Reservations.AnyAsync(reservation => reservation.TableId == tableId &&
             (!excludingId.HasValue || reservation.Id != excludingId.Value) &&
-            (reservation.Status == ReservationStatus.Pending || reservation.Status == ReservationStatus.Confirmed) &&
-            reservation.ReservationDateTime < end && reservation.ReservationDateTime.AddHours(2) > start, cancellationToken);
+            (reservation.Status == ReservationStatus.Pending || reservation.Status == ReservationStatus.Confirmed ||
+                reservation.Status == ReservationStatus.Completed) &&
+            (reservation.ReservationDateTime < end ||
+                (reservation.Status == ReservationStatus.Completed && reservation.UpdatedAt < end)) &&
+            reservation.ReservationDateTime.AddHours(2) > start, cancellationToken);
+
+    public Task<bool> HasReceivedPartyAsync(long tableId, DateTimeOffset now, CancellationToken cancellationToken = default)
+        => ReceivedPartiesWithoutOrder(_context, now).AnyAsync(reservation => reservation.TableId == tableId, cancellationToken);
+
+    internal static IQueryable<Reservation> ReceivedPartiesWithoutOrder(SIGERDbContext context, DateTimeOffset now)
+        => context.Reservations.Where(reservation =>
+            reservation.Status == ReservationStatus.Completed && reservation.UpdatedAt <= now &&
+            reservation.ReservationDateTime.AddHours(2) > now &&
+            reservation.Order == null);
 
     public async Task<PaginatedResult<Reservation>> GetPagedAsync(
         int pageNumber,

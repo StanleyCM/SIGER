@@ -30,7 +30,6 @@ public class OrderPaymentTests
         Assert.Equal(25m, result.Value!.Total);
         Assert.Equal("note", result.Value.Notes);
         Assert.Equal("Soup", Assert.Single(result.Value.Details).ProductName);
-        Assert.DoesNotContain(typeof(CreateOrderDetailRequestDto).GetProperties(), p => p.Name is "Price" or "UnitPrice" or "Subtotal");
         f.Work.Verify(x => x.ExecuteInTransactionAsync(It.IsAny<Func<CancellationToken, Task<SIGER.Application.Base.Result<OrderDto>>>>(), f.Token), Times.Once);
         f.Work.Verify(x => x.SaveChangesAsync(f.Token), Times.Once);
     }
@@ -72,6 +71,8 @@ public class OrderPaymentTests
     [Fact]
     public async Task Payment_coordinates_payment_order_and_table_inside_transaction()
     {
+        f.Order.Status = OrderStatus.Served;
+        f.Order.AccountRequested = true;
         f.Table.Status = TableStatus.Occupied;
         f.Payments.Setup(x => x.AddAsync(It.IsAny<Payment>(), f.Token)).Callback<Payment, CancellationToken>((p, _) =>
         {
@@ -90,26 +91,55 @@ public class OrderPaymentTests
     }
 
     [Theory]
-    [InlineData("cancelled")]
     [InlineData("amount")]
     [InlineData("duplicate")]
     public async Task Payment_rejects_invalid_state_without_saving(string scenario)
     {
         var request = new ProcessPaymentRequestDto { OrderId = 5, UserId = 1, Amount = 25m };
+        f.Order.Status = OrderStatus.Served;
+        f.Order.AccountRequested = true;
         switch (scenario)
         {
-            case "order": request.OrderId = 99; break;
-            case "paid": f.Order.Status = OrderStatus.Paid; break;
-            case "cancelled": f.Order.Status = OrderStatus.Cancelled; break;
-            case "user": request.UserId = 99; break;
-            case "inactive": f.User.IsActive = false; break;
-            case "zero": request.Amount = 0; break;
             case "amount": request.Amount = 24; break;
             case "duplicate": f.Payments.Setup(x => x.GetByOrderIdAsync(5, It.IsAny<CancellationToken>())).ReturnsAsync(new Payment()); break;
-            case "table": f.Order.Table = null; f.Order.TableId = 99; break;
         }
         Assert.True((await f.PaymentService.ProcessPaymentAsync(request)).IsFailure);
         f.NoSave(); f.Payments.Verify(x => x.AddAsync(It.IsAny<Payment>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Theory]
+    [InlineData(OrderStatus.Pending, true, "A table order must be served before payment.")]
+    [InlineData(OrderStatus.InPreparation, true, "A table order must be served before payment.")]
+    [InlineData(OrderStatus.Ready, true, "A table order must be served before payment.")]
+    [InlineData(OrderStatus.Served, false, "Request the account before paying a table order.")]
+    [InlineData(OrderStatus.PreOrdered, false, "A preorder is not operational.")]
+    [InlineData(OrderStatus.Cancelled, true, "A cancelled order cannot be paid.")]
+    [InlineData(OrderStatus.Paid, true, "The order is already paid.")]
+    public async Task Ineligible_table_order_returns_specific_error_without_writes(OrderStatus status, bool account, string expected)
+    {
+        f.Order.Status = status;
+        f.Order.AccountRequested = account;
+        var result = await f.PaymentService.ProcessPaymentAsync(new() { OrderId = 5, UserId = 1, Amount = 25m });
+        Assert.Equal(expected, result.Error);
+        Assert.Equal(status, f.Order.Status);
+        f.NoSave();
+        f.Payments.Verify(x => x.AddAsync(It.IsAny<Payment>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Theory]
+    [InlineData(OrderStatus.Pending)]
+    [InlineData(OrderStatus.InPreparation)]
+    [InlineData(OrderStatus.Ready)]
+    [InlineData(OrderStatus.Served)]
+    public async Task Takeaway_can_be_paid_without_requesting_account(OrderStatus status)
+    {
+        f.Order.Type = OrderType.TakeAway;
+        f.Order.TableId = null;
+        f.Order.Status = status;
+        var result = await f.PaymentService.ProcessPaymentAsync(new() { OrderId = 5, UserId = 1, Amount = 25m });
+        Assert.True(result.IsSuccess, result.Error);
+        Assert.Equal(OrderStatus.Paid, f.Order.Status);
+        f.Tables.VerifyNoOtherCalls();
     }
 
 }

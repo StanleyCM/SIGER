@@ -473,26 +473,11 @@ internal sealed class PaymentsForm : UserControl
             paymentSummaryLabel.Text = "Pago registrado: Pulsa «Consultar orden y pago en servidor» para verificar.";
         }
 
-        var canPay = PaymentApiService.CanProcessPayment(order, selectedPayment);
-        if (!canPay)
-        {
-            operationalHintLabel.Text = selectedPayment is not null || order.Status == OrderStatus.Paid
-                ? "Esta orden ya fue pagada y no admite otro registro de pago."
-                : $"El estado actual ({OrderApiService.FormatStatus(order.Status)}) no admite cobro en caja.";
-        }
-        else if (order.Status != OrderStatus.Served || !order.AccountRequested)
-        {
-            operationalHintLabel.Text =
-                $"Aviso operativo: la orden está «{OrderApiService.FormatStatus(order.Status)}» y {(order.AccountRequested ? "con cuenta solicitada" : "aún sin cuenta solicitada")}. " +
-                "Puedes pasarla a Cobros, pero confirma antes con el mesero que el servicio haya concluido.";
-        }
-        else
-        {
-            operationalHintLabel.Text = "Orden servida y con cuenta solicitada: lista para registrar su cobro en caja.";
-        }
+        var blocked = PaymentApiService.GetPaymentBlockReason(order, selectedPayment);
+        operationalHintLabel.Text = blocked ?? "Orden lista para registrar su cobro en caja.";
 
         verifyOrderPaymentButton.Enabled = !busy;
-        openCheckoutButton.Enabled = !busy && canPay;
+        openCheckoutButton.Enabled = !busy && blocked is null;
     }
 
     private void SetBusy(bool busy)

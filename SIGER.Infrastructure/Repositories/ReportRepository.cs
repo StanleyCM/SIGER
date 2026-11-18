@@ -1,3 +1,4 @@
+using System.Data;
 using Microsoft.EntityFrameworkCore;
 using SIGER.Application.DTOs.Reports;
 using SIGER.Application.Interfaces.Repositories;
@@ -11,31 +12,28 @@ public sealed class ReportRepository(SIGERDbContext context) : IReportRepository
     public async Task<SalesReportDto> GetSalesReportAsync(
         DateTimeOffset startDate,
         DateTimeOffset endDate,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        int productLimit = 10)
     {
-        var paidOrders = context.Orders
-            .AsNoTracking()
-            .Where(order =>
-                order.Status == OrderStatus.Paid &&
-                order.OrderDateTime >= startDate &&
-                order.OrderDateTime <= endDate);
-
-        var totalOrders = await paidOrders.CountAsync(cancellationToken);
-        var totalRevenue = await paidOrders
-            .Select(order => (decimal?)order.Total)
-            .SumAsync(cancellationToken) ?? 0m;
+        // Revenue, order count and product ranking must describe the same set of paid orders.
+        await using var snapshot = await context.Database.BeginTransactionAsync(
+            IsolationLevel.RepeatableRead, cancellationToken);
+        var totals = await CompletedPayments(startDate, endDate).GroupBy(_ => 1)
+            .Select(payments => new { Count = payments.Count(), Revenue = payments.Sum(payment => payment.Amount) })
+            .SingleOrDefaultAsync(cancellationToken);
         var topSellingProducts = await GetTopSellingProductsAsync(
             startDate,
             endDate,
-            10,
+            productLimit,
             cancellationToken);
+        await snapshot.CommitAsync(cancellationToken);
 
         return new SalesReportDto
         {
             StartDate = startDate,
             EndDate = endDate,
-            TotalOrders = totalOrders,
-            TotalRevenue = totalRevenue,
+            TotalOrders = totals?.Count ?? 0,
+            TotalRevenue = totals?.Revenue ?? 0m,
             TopSellingProducts = topSellingProducts
         };
     }
@@ -51,12 +49,11 @@ public sealed class ReportRepository(SIGERDbContext context) : IReportRepository
             return Array.Empty<TopSellingProductDto>();
         }
 
+        var payments = CompletedPayments(startDate, endDate);
         return await context.OrderDetails
             .AsNoTracking()
             .Where(detail =>
-                detail.Order.Status == OrderStatus.Paid &&
-                detail.Order.OrderDateTime >= startDate &&
-                detail.Order.OrderDateTime <= endDate)
+                payments.Any(payment => payment.OrderId == detail.OrderId))
             .GroupBy(detail => new { detail.ProductId, detail.Product.Name })
             .Select(group => new TopSellingProductDto
             {
@@ -71,4 +68,8 @@ public sealed class ReportRepository(SIGERDbContext context) : IReportRepository
             .Take(limit)
             .ToListAsync(cancellationToken);
     }
+
+    private IQueryable<SIGER.Domain.Entities.Payment> CompletedPayments(DateTimeOffset startDate, DateTimeOffset endDate) =>
+        context.Payments.AsNoTracking().Where(payment => payment.Status == PaymentStatus.Completed
+            && payment.PaymentDate >= startDate && payment.PaymentDate < endDate);
 }

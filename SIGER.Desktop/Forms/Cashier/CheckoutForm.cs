@@ -128,7 +128,7 @@ internal sealed class CheckoutForm : UserControl
             if (cts.IsCancellationRequested || IsDisposed) return;
 
             candidateOrders = page.Items
-                .Where(o => PaymentApiService.CanProcessPayment(o.Status) || (preferredOrderId.HasValue && o.Id == preferredOrderId.Value))
+                .Where(o => PaymentApiService.CanProcessPayment(o) || (preferredOrderId.HasValue && o.Id == preferredOrderId.Value))
                 .OrderByDescending(o => o.AccountRequested)
                 .ThenByDescending(o => o.Status == OrderStatus.Served)
                 .ThenByDescending(o => o.OrderDateTime)
@@ -269,10 +269,10 @@ internal sealed class CheckoutForm : UserControl
                 return;
             }
 
-            if (!PaymentApiService.CanProcessPayment(latestOrder.Status))
+            if (PaymentApiService.GetPaymentBlockReason(latestOrder) is { } blocked)
             {
                 ShowFeedback(
-                    $"La Orden #{latestOrder.Id} ahora figura como «{OrderApiService.FormatStatus(latestOrder.Status)}» y no puede cobrarse.",
+                    $"Orden #{latestOrder.Id}: {blocked}",
                     isError: true);
                 return;
             }
@@ -318,7 +318,12 @@ internal sealed class CheckoutForm : UserControl
         {
             if (cts.IsCancellationRequested || IsDisposed) return;
 
-            if (error.StatusCode is null)
+            if (currentPayment is { } confirmed && confirmed.OrderId == snapshot.Id)
+            {
+                ShowFeedback($"Pago #{confirmed.Id} registrado. No se pudo actualizar la vista de la orden: {error.Message}", isError: true);
+                return;
+            }
+            if (error.StatusCode is null || (int)error.StatusCode.Value >= 500)
             {
                 // Timeout or network interruption: mark uncertain and block blind retries until reconciled.
                 uncertainPaymentOrderId = snapshot.Id;
@@ -345,6 +350,7 @@ internal sealed class CheckoutForm : UserControl
                 {
                     // Keep original conflict error if refresh fails.
                 }
+                catch (OperationCanceledException) when (cts.IsCancellationRequested) { return; }
             }
 
             ShowFeedback(error.Message, isError: true);
@@ -615,20 +621,8 @@ internal sealed class CheckoutForm : UserControl
             paymentResultLabel.Text = "Resultado del pago: Sin pago registrado todavía para esta orden.";
             paymentResultLabel.ForeColor = DesktopTheme.Muted;
 
-            if (!PaymentApiService.CanProcessPayment(order.Status))
-            {
-                operationalNoticeLabel.Text = $"El estado actual ({OrderApiService.FormatStatus(order.Status)}) no admite registro de pago.";
-            }
-            else if (order.Status != OrderStatus.Served || !order.AccountRequested)
-            {
-                operationalNoticeLabel.Text =
-                    $"Aviso operativo: la orden figura como «{OrderApiService.FormatStatus(order.Status)}» y {(order.AccountRequested ? "con cuenta solicitada" : "sin cuenta solicitada")}. " +
-                    "Confirma con el mesero antes de registrar el pago.";
-            }
-            else
-            {
-                operationalNoticeLabel.Text = "Orden servida y con cuenta solicitada. Verifica el método de pago y confirma el cobro.";
-            }
+            operationalNoticeLabel.Text = PaymentApiService.GetPaymentBlockReason(order)
+                ?? "Orden lista para cobrar. Verifica el método de pago y confirma.";
         }
 
         var isThisOrderUncertain = uncertainPaymentOrderId == order.Id;

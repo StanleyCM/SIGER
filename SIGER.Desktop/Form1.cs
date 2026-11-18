@@ -99,6 +99,20 @@ internal partial class Form1 : Form
         {
             ordersForm = new OrdersForm(tables, products, orders) { Visible = false };
             reservationsForm = new ReservationsForm(reservations, tables, identity.UserId) { Visible = false };
+            reservationsForm.OpenOrdersModuleRequested += async (_, nav) =>
+            {
+                if (FindModule("Órdenes") is { } ordersModule && ordersForm is not null)
+                {
+                    SelectModuleView(ordersModule);
+                    if (nav.LinkedOrder is { } order && order.Status != SIGER.Domain.Enums.OrderStatus.PreOrdered)
+                        await ordersForm.OpenOrderAsync(order.Id, order.TableId ?? nav.Reservation.TableId);
+                    else
+                        await ordersForm.PrepareNewOrderForReservationAsync(
+                            nav.Reservation.Id,
+                            nav.Reservation.TableId,
+                            nav.Reservation.TableNumber);
+                }
+            };
         }
 
         if (kitchenModuleEnabled && FindModule("Órdenes de cocina") is not null)
