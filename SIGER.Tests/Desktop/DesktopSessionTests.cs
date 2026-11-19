@@ -275,6 +275,41 @@ public sealed class DesktopSessionTests
     }
 
     [Fact]
+    public async Task Waiter_creates_takeaway_without_table_or_reservation()
+    {
+        using var fixture = new Fixture(async (request, token) =>
+        {
+            Assert.Equal(HttpMethod.Post, request.Method);
+            Assert.Equal("/api/v1/orders", request.RequestUri!.AbsolutePath);
+            Assert.Equal("Bearer", request.Headers.Authorization?.Scheme);
+            using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(token));
+            var payload = body.RootElement;
+            Assert.Equal("TakeAway", payload.GetProperty("type").GetString());
+            Assert.Equal("Desktop", payload.GetProperty("origin").GetString());
+            Assert.Equal(JsonValueKind.Null, payload.GetProperty("tableId").ValueKind);
+            Assert.Equal(JsonValueKind.Null, payload.GetProperty("reservationId").ValueKind);
+            Assert.Equal("Para recoger", payload.GetProperty("notes").GetString());
+            var item = Assert.Single(payload.GetProperty("items").EnumerateArray());
+            Assert.Equal(11L, item.GetProperty("productId").GetInt64());
+            Assert.Equal(2, item.GetProperty("quantity").GetInt32());
+            Assert.Equal("Sin cebolla", item.GetProperty("note").GetString());
+            return JsonStringResponse("""{"id":102,"type":"TakeAway","status":"Pending","origin":"Desktop","total":25.00,"details":[]}""",
+                HttpStatusCode.Created);
+        });
+        fixture.StartSession();
+
+        Assert.Throws<ApiException>(() => { _ = fixture.Orders.CreateTakeAwayOrderAsync([]); });
+        var created = await fixture.Orders.CreateTakeAwayOrderAsync(
+            [new CreateOrderDetailRequestDto { ProductId = 11, Quantity = 2, Note = " Sin cebolla " }],
+            " Para recoger ");
+
+        Assert.Equal(102L, created.Id);
+        Assert.Equal(OrderType.TakeAway, created.Type);
+        Assert.Null(created.TableId);
+        Assert.Null(created.ReservationId);
+    }
+
+    [Fact]
     public async Task Waiter_order_workflow_supports_filtering_line_mutations_status_transitions_account_request_and_conflicts()
     {
         var simulateConflict = false;

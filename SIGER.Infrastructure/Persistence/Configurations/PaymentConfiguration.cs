@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
+using SIGER.Application.DTOs.Payments;
 using SIGER.Domain.Entities;
 
 namespace SIGER.Infrastructure.Persistence.Configurations;
@@ -16,7 +17,7 @@ public class PaymentConfiguration : IEntityTypeConfiguration<Payment>
         builder.Property(payment => payment.Amount).HasColumnName("monto").HasPrecision(12, 2).IsRequired();
         builder.Property(payment => payment.Method).HasColumnName("metodo").HasColumnType("metodo_pago").IsRequired();
         builder.Property(payment => payment.Status).HasColumnName("estado").HasColumnType("estado_pago").IsRequired();
-        builder.Property(payment => payment.Reference).HasColumnName("referencia").HasMaxLength(150);
+        builder.Property(payment => payment.Reference).HasColumnName("referencia").HasMaxLength(ProcessPaymentRequestDto.MaxReferenceLength);
         builder.Property(payment => payment.PaymentDate).HasColumnName("fecha_pago").HasColumnType("timestamp with time zone").IsRequired();
         builder.Property(payment => payment.UpdatedAt).HasColumnName("fecha_actualizacion").HasColumnType("timestamp with time zone").IsRequired();
 

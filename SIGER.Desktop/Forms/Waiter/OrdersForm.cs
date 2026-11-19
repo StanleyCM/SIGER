@@ -22,7 +22,8 @@ internal sealed class OrdersForm : UserControl
     private readonly Label feedback = DesktopTheme.Label("", DesktopTheme.Small, DesktopTheme.Error);
     private readonly ProgressBar progress = new() { Style = ProgressBarStyle.Marquee, Visible = false, Height = 5, Dock = DockStyle.Fill };
 
-    // Section 1: New table order builder
+    // Section 1: New order builder
+    private readonly CheckBox takeAwayToggle = new() { Text = "Para llevar", AutoSize = true };
     private readonly ComboBox newOrderTableCombo = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 210 };
     private readonly ComboBox newOrderProductCombo = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 310 };
     private readonly NumericUpDown newOrderQuantity = new() { Minimum = 1, Maximum = 100, Value = 1, Width = 75 };
@@ -85,6 +86,7 @@ internal sealed class OrdersForm : UserControl
     private long? draftReservationId;
     private long? draftReservationTableId;
     private long? uncertainSubmissionTableId;
+    private bool uncertainTakeAwaySubmission;
     private int currentPage = 1;
     private int totalPages = 1;
     private int totalOrdersCount;
@@ -142,6 +144,7 @@ internal sealed class OrdersForm : UserControl
     {
         draftReservationId = null;
         draftReservationTableId = null;
+        takeAwayToggle.Checked = false;
         await LoadWorkspaceAsync(preferredAvailableTableId: table.Id, filterTableId: table.Id, selectOrderId: null);
         RefreshDraftView();
         ShowFeedback($"Mesa #{table.Number:00} seleccionada para nueva orden. Agrega productos al borrador y envíala al servidor.", isError: false);
@@ -152,6 +155,7 @@ internal sealed class OrdersForm : UserControl
     {
         draftReservationId = reservationId;
         draftReservationTableId = tableId;
+        takeAwayToggle.Checked = false;
         await LoadWorkspaceAsync(preferredAvailableTableId: tableId, filterTableId: tableId, selectOrderId: null);
         RefreshDraftView();
         var tableText = tableNumber.HasValue ? $"Mesa #{tableNumber.Value:00}" : $"Mesa #{tableId}";
@@ -183,6 +187,8 @@ internal sealed class OrdersForm : UserControl
         addDraftButton.Click += (_, _) => AddDraftItem();
         removeDraftButton.Click += (_, _) => RemoveSelectedDraftItem();
         clearDraftButton.Click += (_, _) => ClearDraft();
+        takeAwayToggle.CheckedChanged += (_, _) => UpdateDraftActionStates();
+        newOrderTableCombo.SelectedIndexChanged += (_, _) => UpdateDraftActionStates();
         createOrderButton.Click += async (_, _) => await CreateOrderOnServerAsync();
         verifyUncertainButton.Click += async (_, _) => await VerifyUncertainOrderAsync();
 
@@ -377,11 +383,16 @@ internal sealed class OrdersForm : UserControl
 
     private async Task ClearFiltersAsync()
     {
+        ResetFilters();
+        await LoadOrdersPageAsync(1, null);
+    }
+
+    private void ResetFilters()
+    {
         if (tableFilterCombo.Items.Count > 0) tableFilterCombo.SelectedIndex = 0;
         if (statusFilterCombo.Items.Count > 0) statusFilterCombo.SelectedIndex = 0;
         orderIdFilter.Value = 0;
         dateRangeToggle.Checked = false;
-        await LoadOrdersPageAsync(1, null);
     }
 
     private void AddDraftItem()
@@ -433,13 +444,16 @@ internal sealed class OrdersForm : UserControl
         draftReservationId = null;
         draftReservationTableId = null;
         uncertainSubmissionTableId = null;
+        uncertainTakeAwaySubmission = false;
         RefreshDraftView();
     }
 
     private async Task CreateOrderOnServerAsync()
     {
-        if (pendingOperation is not null) return;
-        if (newOrderTableCombo.SelectedItem is not TableComboItem { Table: var table })
+        if (pendingOperation is not null || uncertainTakeAwaySubmission) return;
+        var takeAway = takeAwayToggle.Checked;
+        var table = takeAway ? null : (newOrderTableCombo.SelectedItem as TableComboItem)?.Table;
+        if (!takeAway && table is null)
         {
             ShowFeedback("Selecciona una mesa disponible antes de crear la orden.", isError: true);
             newOrderTableCombo.Focus();
@@ -451,7 +465,7 @@ internal sealed class OrdersForm : UserControl
             newOrderProductCombo.Focus();
             return;
         }
-        if (uncertainSubmissionTableId == table.Id)
+        if (table is not null && uncertainSubmissionTableId == table.Id)
         {
             ShowFeedback("El envío anterior para esta mesa quedó incierto. Usa «Consultar mesa y órdenes recientes» antes de volver a enviar.", isError: true);
             verifyUncertainButton.Focus();
@@ -473,7 +487,9 @@ internal sealed class OrdersForm : UserControl
                 Note = line.Note
             }).ToArray();
 
-            var created = await orders.CreateTableOrderAsync(table.Id, items, newOrderNotes.Text, draftReservationId, cts.Token);
+            var created = table is null
+                ? await orders.CreateTakeAwayOrderAsync(items, newOrderNotes.Text, cts.Token)
+                : await orders.CreateTableOrderAsync(table.Id, items, newOrderNotes.Text, draftReservationId, cts.Token);
             confirmedOrder = created;
             if (cts.IsCancellationRequested || IsDisposed) return;
 
@@ -484,12 +500,17 @@ internal sealed class OrdersForm : UserControl
             uncertainSubmissionTableId = null;
             RefreshDraftView();
 
-            await LoadCatalogAndTablesCoreAsync(null, table.Id, cts.Token);
+            if (table is null)
+                ResetFilters();
+            else
+                await LoadCatalogAndTablesCoreAsync(null, table.Id, cts.Token);
             await LoadOrdersPageCoreAsync(1, created.Id, cts.Token);
+            if (cts.IsCancellationRequested || IsDisposed) return;
             ReplaceSelectedOrder(created);
 
+            var destination = table is null ? "para llevar" : $"en Mesa #{created.TableNumber ?? table.Number:00}";
             ShowFeedback(
-                $"Orden #{created.Id} creada en Mesa #{created.TableNumber ?? table.Number:00}. Total del servidor: {created.Total:C2}.",
+                $"Orden #{created.Id} creada {destination}. Total del servidor: {created.Total:C2}.",
                 isError: false);
         }
         catch (OperationCanceledException) when (cts.IsCancellationRequested) { }
@@ -504,9 +525,10 @@ internal sealed class OrdersForm : UserControl
             if (error.StatusCode is null || (int)error.StatusCode.Value >= 500)
             {
                 // Transport or timeout error after sending POST /orders: keep draft and require consulting before retry.
-                uncertainSubmissionTableId = table.Id;
+                uncertainSubmissionTableId = table?.Id;
+                uncertainTakeAwaySubmission = takeAway;
                 ShowFeedback(
-                    $"{error.Message} No se confirmó si la orden se guardó. Conservamos el borrador; pulsa «Consultar mesa y órdenes recientes» antes de otro intento.",
+                    $"{error.Message} No se confirmó si la orden se guardó. Conservamos el borrador. Pulsa «{UncertainOrderAction}» para comprobarlo.",
                     isError: true);
             }
             else
@@ -531,7 +553,7 @@ internal sealed class OrdersForm : UserControl
     {
         if (pendingOperation is not null) return;
         var tableId = uncertainSubmissionTableId ?? (newOrderTableCombo.SelectedItem as TableComboItem)?.Table.Id;
-        if (!tableId.HasValue) return;
+        if (!uncertainTakeAwaySubmission && !tableId.HasValue) return;
 
         using var cts = new CancellationTokenSource();
         pendingOperation = cts;
@@ -540,7 +562,16 @@ internal sealed class OrdersForm : UserControl
 
         try
         {
-            var tableState = await tables.GetByIdAsync(tableId.Value, cts.Token);
+            if (uncertainTakeAwaySubmission)
+            {
+                ResetFilters();
+                await LoadOrdersPageCoreAsync(1, null, cts.Token);
+                if (cts.IsCancellationRequested || IsDisposed) return;
+                ShowFeedback("Revisa las órdenes recientes para comprobar si se registró el pedido para llevar. Vacía el borrador antes de crear otro pedido.", isError: false);
+                return;
+            }
+
+            var tableState = await tables.GetByIdAsync(tableId!.Value, cts.Token);
             await LoadCatalogAndTablesCoreAsync(tableState.Status == TableStatus.Available ? tableState.Id : null, tableState.Id, cts.Token);
             await LoadOrdersPageCoreAsync(1, null, cts.Token);
             uncertainSubmissionTableId = null;
@@ -660,9 +691,12 @@ internal sealed class OrdersForm : UserControl
     private async Task ConfirmAndCancelSelectedOrderAsync()
     {
         if (pendingOperation is not null || selectedOrder is not { } current) return;
+        var message = current.TableId.HasValue
+            ? $"¿Deseas cancelar la Orden #{current.Id} de la Mesa #{current.TableNumber ?? current.TableId}?\n\nSi no hay otra orden activa en la mesa, esta quedará disponible."
+            : $"¿Deseas cancelar la Orden #{current.Id} para llevar?";
         var confirmation = MessageBox.Show(
             this,
-            $"¿Deseas cancelar la Orden #{current.Id} de la Mesa #{current.TableNumber ?? current.TableId}?\n\nSi no hay otra orden activa en la mesa, esta quedará disponible.",
+            message,
             "Confirmar cancelación de orden",
             MessageBoxButtons.YesNo,
             MessageBoxIcon.Warning,
@@ -770,7 +804,7 @@ internal sealed class OrdersForm : UserControl
             WrapContents = true,
             Margin = new Padding(0, 0, 0, 10)
         };
-        var titleLabel = DesktopTheme.Label("1. Crear nueva orden de mesa", DesktopTheme.Strong, DesktopTheme.Ink);
+        var titleLabel = DesktopTheme.Label("1. Crear nueva orden", DesktopTheme.Strong, DesktopTheme.Ink);
         titleLabel.Margin = new Padding(0, 8, 16, 0);
         headerRow.Controls.Add(titleLabel);
         headerRow.Controls.Add(reloadCatalogButton);
@@ -790,6 +824,8 @@ internal sealed class OrdersForm : UserControl
         newOrderItemNote.AccessibleName = "Nota del producto en el borrador";
 
         inputBar.Controls.Add(LabeledField("Mesa disponible", newOrderTableCombo));
+        takeAwayToggle.Margin = new Padding(0, 25, 12, 0);
+        inputBar.Controls.Add(takeAwayToggle);
         inputBar.Controls.Add(LabeledField("Producto (ID · Nombre · Precio)", newOrderProductCombo));
         inputBar.Controls.Add(LabeledField("Cant.", newOrderQuantity));
         inputBar.Controls.Add(LabeledField("Nota de línea", newOrderItemNote));
@@ -1026,7 +1062,7 @@ internal sealed class OrdersForm : UserControl
         }
 
         if (selectedIndex >= 0) newOrderTableCombo.SelectedIndex = selectedIndex;
-        else if (newOrderTableCombo.Items.Count > 0) newOrderTableCombo.SelectedIndex = 0;
+        else if (!draftReservationId.HasValue && newOrderTableCombo.Items.Count > 0) newOrderTableCombo.SelectedIndex = 0;
     }
 
     private void BindTableFilter(long? filterTableId)
@@ -1102,14 +1138,21 @@ internal sealed class OrdersForm : UserControl
         var hasDraftSelection = draftGrid.CurrentRow?.Tag is DraftLine;
         var hasAvailableTable = newOrderTableCombo.SelectedItem is TableComboItem;
         var hasAvailableProduct = newOrderProductCombo.SelectedItem is ProductComboItem;
+        var canEditDraft = !busy && !uncertainTakeAwaySubmission;
 
-        addDraftButton.Enabled = !busy && hasAvailableProduct;
-        removeDraftButton.Enabled = !busy && hasDraftSelection;
+        takeAwayToggle.Enabled = canEditDraft && !draftReservationId.HasValue;
+        newOrderTableCombo.Enabled = canEditDraft && !takeAwayToggle.Checked && !draftReservationId.HasValue;
+        addDraftButton.Enabled = canEditDraft && hasAvailableProduct;
+        removeDraftButton.Enabled = canEditDraft && hasDraftSelection;
         clearDraftButton.Enabled = !busy && (hasDraft || newOrderNotes.TextLength > 0);
-        createOrderButton.Enabled = !busy && hasDraft && hasAvailableTable;
-        verifyUncertainButton.Visible = uncertainSubmissionTableId.HasValue;
-        verifyUncertainButton.Enabled = !busy && uncertainSubmissionTableId.HasValue;
+        createOrderButton.Enabled = canEditDraft && hasDraft && (takeAwayToggle.Checked || hasAvailableTable);
+        var uncertain = uncertainSubmissionTableId.HasValue || uncertainTakeAwaySubmission;
+        verifyUncertainButton.Text = UncertainOrderAction;
+        verifyUncertainButton.Visible = uncertain;
+        verifyUncertainButton.Enabled = !busy && uncertain;
     }
+
+    private string UncertainOrderAction => uncertainTakeAwaySubmission ? "Consultar órdenes recientes" : "Consultar mesa y órdenes recientes";
 
     private void BindOrdersGrid(long? preferredOrderId)
     {
@@ -1298,7 +1341,7 @@ internal sealed class OrdersForm : UserControl
 
     private void SetBusy(bool busy)
     {
-        reloadCatalogButton.Enabled = newOrderTableCombo.Enabled = newOrderProductCombo.Enabled =
+        reloadCatalogButton.Enabled = newOrderProductCombo.Enabled =
             newOrderQuantity.Enabled = newOrderItemNote.Enabled = newOrderNotes.Enabled =
             draftGrid.Enabled = tableFilterCombo.Enabled = statusFilterCombo.Enabled =
             orderIdFilter.Enabled = dateRangeToggle.Enabled = searchOrdersButton.Enabled =

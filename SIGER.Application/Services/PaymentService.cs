@@ -53,6 +53,10 @@ public class PaymentService : IPaymentService
 
     private async Task<Result<PaymentDto>> ProcessPaymentInTransactionAsync(ProcessPaymentRequestDto request, CancellationToken cancellationToken)
     {
+        var reference = Normalize(request.Reference);
+        if (reference?.Length > ProcessPaymentRequestDto.MaxReferenceLength)
+            return Result<PaymentDto>.Failure($"The payment reference cannot exceed {ProcessPaymentRequestDto.MaxReferenceLength} characters.");
+
         var order = await _orderRepository.GetWithDetailsAsync(request.OrderId, cancellationToken);
         if (order is null) return Result<PaymentDto>.Failure("Order not found.");
         if (GetPaymentStateError(order.Type, order.Status, order.AccountRequested) is { } stateError)
@@ -74,7 +78,7 @@ public class PaymentService : IPaymentService
         var payment = new Payment
         {
             OrderId = order.Id, Order = order, UserId = user.Id, User = user, Amount = request.Amount,
-            Method = request.Method, Status = PaymentStatus.Completed, Reference = Normalize(request.Reference),
+            Method = request.Method, Status = PaymentStatus.Completed, Reference = reference,
             PaymentDate = now, UpdatedAt = now
         };
 

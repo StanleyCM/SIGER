@@ -35,7 +35,7 @@ internal sealed class CheckoutForm : UserControl
 
     // Payment registration & reconciliation controls
     private readonly ComboBox methodCombo = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 200 };
-    private readonly TextBox referenceInput = new() { MaxLength = 100, PlaceholderText = "Folio / comprobante no sensible (opcional)", Width = 280 };
+    private readonly TextBox referenceInput = new() { MaxLength = ProcessPaymentRequestDto.MaxReferenceLength, PlaceholderText = "Folio / comprobante no sensible (opcional)", Width = 280 };
     private readonly Label securityHintLabel = DesktopTheme.Label(
         "Registro administrativo: NO solicites ni escribas número completo de tarjeta, CVV ni PIN.",
         DesktopTheme.Small,
@@ -239,9 +239,9 @@ internal sealed class CheckoutForm : UserControl
         }
 
         var reference = referenceInput.Text.Trim();
-        if (reference.Length > 100)
+        if (reference.Length > ProcessPaymentRequestDto.MaxReferenceLength)
         {
-            ShowFeedback("La referencia no puede exceder los 100 caracteres.", isError: true);
+            ShowFeedback($"La referencia no puede exceder los {ProcessPaymentRequestDto.MaxReferenceLength} caracteres.", isError: true);
             referenceInput.Focus();
             return;
         }

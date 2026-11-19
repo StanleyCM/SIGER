@@ -4,6 +4,8 @@ namespace SIGER.Application.DTOs.Payments;
 
 public sealed class ProcessPaymentRequestDto
 {
+    public const int MaxReferenceLength = 150;
+
     public long OrderId { get; set; }
     public long UserId { get; set; }
     public decimal Amount { get; set; }

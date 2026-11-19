@@ -22,8 +22,9 @@ internal sealed class PaymentApiService(ApiClient api)
             throw new ApiException("El monto a cobrar debe ser mayor que cero.");
         if (!Enum.IsDefined(method))
             throw new ApiException("Selecciona un método de pago válido.");
-        if (reference is not null && reference.Trim().Length > 150)
-            throw new ApiException("La referencia del pago no puede superar los 150 caracteres.");
+        var normalizedReference = Normalize(reference);
+        if (normalizedReference?.Length > ProcessPaymentRequestDto.MaxReferenceLength)
+            throw new ApiException($"La referencia del pago no puede superar los {ProcessPaymentRequestDto.MaxReferenceLength} caracteres.");
 
         if (currentOrder is not null)
         {
@@ -40,7 +41,7 @@ internal sealed class PaymentApiService(ApiClient api)
             OrderId = orderId,
             Amount = amount,
             Method = method,
-            Reference = Normalize(reference)
+            Reference = normalizedReference
         };
 
         return api.SendAsync<PaymentDto>(

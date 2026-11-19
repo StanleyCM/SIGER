@@ -502,11 +502,17 @@ public sealed class GuestPreOrderPostgresTests : IAsyncLifetime
             using var forbidden = await waiter.PostAsJsonAsync("/api/v1/payments",
                 new { orderId = order.Id, amount = order.Total, method = "Cash" });
             Assert.Equal(HttpStatusCode.Forbidden, forbidden.StatusCode);
+            using var oversizedReference = await cashier.PostAsJsonAsync("/api/v1/payments",
+                new { orderId = order.Id, amount = order.Total, method = "Cash", reference = new string('R', 151) });
+            Assert.Equal(HttpStatusCode.BadRequest, oversizedReference.StatusCode);
+            Assert.Equal(OrderStatus.Served, (await GetOrder(order.Id)).Status);
+            var reference = new string('R', 150);
             using var payment = await cashier.PostAsJsonAsync("/api/v1/payments",
-                new { orderId = order.Id, amount = order.Total, method = "Cash" });
+                new { orderId = order.Id, amount = order.Total, method = "Cash", reference });
             var paid = await ReadHttp<PaymentDto>(payment, HttpStatusCode.Created);
             Assert.Equal(13, paid.UserId);
             Assert.Equal(order.Total, paid.Amount);
+            Assert.Equal(reference, paid.Reference);
             Assert.Equal(OrderStatus.Paid, (await GetOrder(order.Id)).Status);
             Assert.Equal("Disponible", await Sql("SELECT estado::text FROM mesa WHERE id_mesa=1"));
         }
